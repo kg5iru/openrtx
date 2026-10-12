@@ -67,7 +67,9 @@ openrtx_src = ['openrtx/src/core/state.c',
                'openrtx/src/protocols/M17/Demodulator.cpp',
                'openrtx/src/protocols/M17/FrameEncoder.cpp',
                'openrtx/src/protocols/M17/FrameDecoder.cpp',
-               'openrtx/src/protocols/M17/LinkSetupFrame.cpp']
+               'openrtx/src/protocols/M17/LinkSetupFrame.cpp',
+               'openrtx/src/protocols/DMR/Bptc19696.cpp',
+               'openrtx/src/protocols/DMR/ReedSolomon1294.cpp']
 
 openrtx_inc = ['openrtx/include', 'platform']
 
@@ -1226,6 +1228,22 @@ m17_packet_test = executable('m17_packet_test',
                               sources : unit_test_src + ['tests/unit/M17_packet.cpp'],
                               kwargs  : unit_test_opts)
 
+dmr_fec_test = executable('dmr_fec_test',
+                           sources : unit_test_src + ['tests/unit/DMR_fec.cpp'],
+                           kwargs  : unit_test_opts)
+
+dmr_bptc_test = executable('dmr_bptc_test',
+                            sources : unit_test_src + ['tests/unit/DMR_bptc.cpp'],
+                            kwargs  : unit_test_opts)
+
+dmr_crc_test = executable('dmr_crc_test',
+                           sources : unit_test_src + ['tests/unit/DMR_crc.cpp'],
+                           kwargs  : unit_test_opts)
+
+dmr_frames_test = executable('dmr_frames_test',
+                              sources : unit_test_src + ['tests/unit/DMR_frames.cpp'],
+                              kwargs  : unit_test_opts)
+
 dsp_oversampling_test = executable('dsp_oversampling_test',
                                     sources : unit_test_src + ['tests/unit/dsp_oversampling.cpp'],
                                     kwargs  : unit_test_opts)
@@ -1266,6 +1284,10 @@ test('Codeplug Test',         cps_test)
 test('minmea conversion Test', minmea_conversion_test)
 test('UI Check Standby Test', ui_check_standby_test)
 test('M17 Packet Frame Test', m17_packet_test)
+test('DMR FEC Unit Test',     dmr_fec_test)
+test('DMR BPTC Unit Test',    dmr_bptc_test)
+test('DMR CRC Unit Test',     dmr_crc_test)
+test('DMR Frames Unit Test',  dmr_frames_test)
 test('DSP Oversampling Test', dsp_oversampling_test)
 test('GFX Text Test',        gfx_text_test)
 test('M17 Baseband Replay Test', m17_replay_test)

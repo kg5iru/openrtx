@@ -148,7 +148,46 @@ void HR_Cx000< M >::setModOffset(const uint16_t offset)
 template< class M >
 void HR_Cx000< M >::dmrMode()
 {
-
+    /*
+     * NOTE: ported from HR_C6000_UV3x0.cpp's dmrMode(), which is itself
+     * never called anywhere in the current codebase and thus unverified
+     * there too. CS7000 and MD-UV3x0 share the same HR_C6000 baseband
+     * chip and the same writeReg()/CONFIG register map, so the register
+     * sequence should carry over, but it has NOT been tested against a
+     * physical CS7000 M17 PLUS -- no hardware was available while
+     * writing this. Treat this function as a documented starting point
+     * for hardware bring-up, not as validated support; it is
+     * deliberately left uncalled (see docs/DMR_STATUS.md).
+     *
+     * The DMR-related CRC/RS XOR masks this chip's hardware FEC engine
+     * uses (0x9696.., 0x9999.., 0xA5A5, 0xAAAA, 0xCCCC, programmed
+     * globally in init()'s initSeq4, independently of this function)
+     * match the ETSI TS 102 361-1 Annex B.3.12 Data Type CRC Mask table
+     * exactly -- a useful cross-check that this chip's "DMR mode"
+     * really is implementing the standard air interface, and that the
+     * mask constants used by the software FEC in include/protocols/DMR
+     * are correct.
+     */
+    writeReg(M::CONFIG, 0x10, 0x4F);    // DMR mode, Tier I, TimeSlot, 2nd layer mode, relay, aligned (?)
+    writeReg(M::CONFIG, 0x81, 0x19);    // Interrupt mask
+    writeReg(M::CONFIG, 0x01, 0xF0);    // Swap TX IQ, swap RX IQ, two point mode for TX, IF mode for RX
+    writeReg(M::CONFIG, 0xE4, 0x27);    // Lineout gain, first and second stage mic gain
+    writeReg(M::CONFIG, 0xE5, 0x1A);    // Undocumented register
+    writeReg(M::CONFIG, 0x25, 0x0E);    // Undocumented register
+    writeReg(M::CONFIG, 0x26, 0xFD);    // Undocumented register
+    writeReg(M::AUX,    0x54, 0x78);
+    writeReg(M::CONFIG, 0x1F, 0x10);    // Color code, encryption disabled
+    writeReg(M::AUX,    0x24, 0x00);
+    writeReg(M::AUX,    0x25, 0x00);
+    writeReg(M::AUX,    0x26, 0x00);
+    writeReg(M::AUX,    0x27, 0x00);
+    writeReg(M::CONFIG, 0x41, 0x40);    // Start RX for upcoming time slot interrupt
+    writeReg(M::CONFIG, 0x56, 0x00);    // Undocumented register
+    writeReg(M::CONFIG, 0x41, 0x40);    // Start RX for upcoming time slot interrupt
+    writeReg(M::CONFIG, 0x5C, 0x09);    // Undocumented register
+    writeReg(M::CONFIG, 0x5F, 0xC0);    // Detect BS and MS frame sequences in 2 layer mode
+    sendSequence(initSeq7, sizeof(initSeq7));
+    writeReg(M::CONFIG, 0x11, 0x80);    // Local channel mode
 }
 
 template< class M >
