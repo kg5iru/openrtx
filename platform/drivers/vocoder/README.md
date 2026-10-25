@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # AMBE+2 vocoder for the CS7000-PLUS (software, from your own firmware)
 
 The CS7000-PLUS has no vocoder chip.  The HR_C6000 hands 72-bit half-rate
