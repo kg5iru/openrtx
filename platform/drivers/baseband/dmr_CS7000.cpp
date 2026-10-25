@@ -44,12 +44,38 @@
 #include "hwconfig.h"
 #include "drivers/baseband/HR_C6000.h"
 #include "drivers/baseband/dmr_CS7000.h"
+#include "peripherals/spi.h"
+#include "drivers/SPI/spi_stm32.h"
+
+/*
+ * Voice payload port (V_SPI).  The stock firmware reads the 27 voice bytes
+ * of a burst through SPI1 (PB3 SCK, PB4 MISO, PB5 MOSI, PB6 CS; mode 0/CPHA=1,
+ * MSB first) with the command bytes 0x83, 0x00 (0x08085C62), not from the
+ * U_SPI RX RAM windows.  Clock rate is a conservative guess (stock MBR=6).
+ */
+static void vspiInit()
+{
+    gpio_setMode(V_SPI_SCK, ALTERNATE | ALTERNATE_FUNC(5));
+    gpio_setMode(V_SPI_MISO, ALTERNATE | ALTERNATE_FUNC(5));
+    gpio_setMode(V_SPI_MOSI, ALTERNATE | ALTERNATE_FUNC(5));
+    gpio_setMode(V_SPI_CS, OUTPUT);
+    gpio_setPin(V_SPI_CS);
+    spiStm32_init(&v_spi, 1500000, SPI_FLAG_CPHA);
+}
+
+static void vspiReadVoice(uint8_t out[27])
+{
+    uint8_t tx[29] = { 0x83, 0x00 };
+    uint8_t rx[29];
+    gpio_clearPin(V_SPI_CS);
+    spi_transfer(&v_spi, tx, rx, sizeof(tx));
+    gpio_setPin(V_SPI_CS);
+    for (int i = 0; i < 27; i++)
+        out[i] = rx[2 + i];
+}
 
 // Local, hardcoded matches for first bring-up. TODO: pull from rtxStatus_t.
 static constexpr uint8_t LOCAL_COLOUR_CODE = 0x01;
-static constexpr uint8_t LOCAL_SLOT_BIT =
-    0; // stock cfg+0x34 bit4; which slot this is is unconfirmed
-static bool windowSwap = false;
 
 enum class DmrRxState {
     LISTENING,       // Waiting for a matching voice/data header (sys_inter)
@@ -121,18 +147,6 @@ void _Z16EXTI0_IRQHandlerv()
 // Link control is read from RX RAM address 0x00, 9 bytes: FLCO, FID,
 // service options, dst[3], src[3] (24 bit big-endian).
 // The stock firmware always acknowledges, even for events it ignores.
-static bool isVoiceSync(const uint8_t *p)
-{
-    static const uint8_t bs[6] = { 0x75, 0x5F, 0xD7, 0xDF, 0x75, 0xF7 };
-    static const uint8_t ms[6] = { 0x7F, 0x7D, 0x5D, 0xD5, 0x7D, 0xFD };
-    bool b = true, m = true;
-    for (int i = 0; i < 6; i++) {
-        b = b && (p[i] == bs[i]);
-        m = m && (p[i] == ms[i]);
-    }
-    return b || m;
-}
-
 static uint32_t be24(const uint8_t *p)
 {
     return (uint32_t(p[0]) << 16) | (uint32_t(p[1]) << 8) | p[2];
@@ -141,7 +155,6 @@ static uint32_t be24(const uint8_t *p)
 static void endCall()
 {
     callActive = false;
-    windowSwap = false;
     voiceBurstReady = false;
     rxState = DmrRxState::LISTENING;
 }
@@ -181,32 +194,10 @@ void _Z16EXTI3_IRQHandlerv()
             }
         } else if (callActive) // voice burst
         {
-            // Two RX RAM windows, 0x30 and 0x60 (36 bytes: 3 header, 6 sync
-            // or EMB, 27 voice).  The stock firmware picks the window from
-            // the slot bit and a "swap" latch that it sets when the frame A
-            // sync shows up in the other window.  Frames B..F are read as
-            // 27 bytes straight from window + 9.
-            uint8_t n = (reg51 >> 4) & 0x07;
-            uint8_t primary = (LOCAL_SLOT_BIT != 0) ? 0x60 : 0x30;
-            if (windowSwap)
-                primary ^= 0x50; // 0x60 <-> 0x30 (0x60 ^ 0x50 = 0x30)
-
-            if (n == 0) {
-                uint8_t burst[36];
-                C6000.readRxBurst(primary, burst, sizeof(burst));
-                if (!isVoiceSync(&burst[3])) {
-                    uint8_t other = primary ^ 0x50;
-                    C6000.readRxBurst(other, burst, sizeof(burst));
-                    if (isVoiceSync(&burst[3])) {
-                        windowSwap = !windowSwap;
-                        primary = other;
-                    }
-                }
-                for (int i = 0; i < 27; i++)
-                    voiceBurst[i] = burst[9 + i];
-            } else {
-                C6000.readRxBurst(primary + 9, voiceBurst, 27);
-            }
+            // Voice bytes come from V_SPI (see vspiReadVoice).  The RX RAM
+            // windows (0x30/0x60) are not the codec input in the stock
+            // firmware.
+            vspiReadVoice(voiceBurst);
 
             if (rxState != DmrRxState::VOICE_RX)
                 C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
@@ -240,6 +231,7 @@ void dmr_init()
     gpio_setMode(DMR_TX_INT, INPUT);
 
     rxState = DmrRxState::LISTENING;
+    vspiInit();
 
     /*
      * HR_C6000 interrupts are active-low pulses (manual, section 5.1), so

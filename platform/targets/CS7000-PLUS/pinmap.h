@@ -106,6 +106,12 @@
 #define I2S_RX        GPIOC,11
 #define I2S_TX        GPIOC,12
 
+/* HR_C6000 voice port (V_SPI), SPI1 on GPIOB, AF5, mode CPHA=1 */
+#define V_SPI_SCK     GPIOB,3
+#define V_SPI_MISO    GPIOB,4
+#define V_SPI_MOSI    GPIOB,5
+#define V_SPI_CS      GPIOB,6
+
 #define DMR_TS_INT    GPIOC,0
 #define DMR_SYS_INT   GPIOC,3   // SYS_INTER; schematic net + stock GPIOC pins 0/2/3 falling-edge IT
 #define DMR_TX_INT    GPIOC,2
