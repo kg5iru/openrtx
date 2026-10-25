@@ -76,6 +76,71 @@ public:
      */
     void sendTone(const uint32_t freq, const uint8_t deviation);
 
+    /**
+     * Write a block of bytes into the chip's TX-side 1.2K RAM (DMR Layer 2
+     * frame buffer). Address map and per-frame-type sizes are documented in
+     * the HR_C6000 manual, section 5.3.
+     *
+     * NOTE: unverified against real hardware -- addressing scheme mirrors
+     * writeReg16()/readReg16() below, which *are* exercised elsewhere in
+     * this driver (sendTone()), but the extended addressing byte order in
+     * the manual's translation is garbled, so double-check with a logic
+     * analyzer before trusting this for anything beyond bring-up.
+     *
+     * @param addr: start address within TX RAM (see manual table 5.2).
+     * @param data: pointer to the bytes to write.
+     * @param len: number of bytes to write.
+     */
+    inline void writeTxRam(const uint16_t addr, const uint8_t *data, const size_t len)
+    {
+        uint8_t cmd[3];
+        cmd[0] = static_cast< uint8_t >(C6000_SpiOpModes::DATA) | SPI_FLAGS_EXTD;
+        cmd[1] = addr & 0xFF;
+        cmd[2] = (addr >> 8) & 0x07;
+
+        ScopedChipSelect cs(uSpi, uCs);
+        spi_send(uSpi, cmd, 3);
+        spi_send(uSpi, data, len);
+    }
+
+    /**
+     * Read a block of bytes from the chip's RX-side 1.2K RAM (DMR Layer 2
+     * frame buffer). See writeTxRam() for caveats.
+     *
+     * @param addr: start address within RX RAM (see manual table 5.3).
+     * @param data: pointer to the buffer that will receive the read bytes.
+     * @param len: number of bytes to read.
+     */
+    inline void readRxRam(const uint16_t addr, uint8_t *data, const size_t len)
+    {
+        uint8_t cmd[3];
+        cmd[0] = static_cast< uint8_t >(C6000_SpiOpModes::DATA)
+                | SPI_FLAGS_READ | SPI_FLAGS_EXTD;
+        cmd[1] = addr & 0xFF;
+        cmd[2] = (addr >> 8) & 0x07;
+
+        ScopedChipSelect cs(uSpi, uCs);
+        spi_send(uSpi, cmd, 3);
+        spi_receive(uSpi, data, len);
+    }
+
+    /**
+     * Read a received burst the way the stock CS7000 firmware does: a two
+     * byte command (read | DATA mode, 8-bit address) followed by the data.
+     * The stock firmware reads 36 bytes from address 0x30 or 0x60:
+     * 3 header bytes, 6 bytes sync/EMB, 27 bytes (3 x 72 bit) of voice.
+     */
+    inline void readRxBurst(const uint8_t addr, uint8_t *data, const size_t len)
+    {
+        uint8_t cmd[2];
+        cmd[0] = SPI_FLAGS_READ | static_cast< uint8_t >(C6000_SpiOpModes::DATA);
+        cmd[1] = addr;
+
+        ScopedChipSelect cs(uSpi, uCs);
+        spi_send(uSpi, cmd, 2);
+        spi_receive(uSpi, data, len);
+    }
+
 private:
 
     /**

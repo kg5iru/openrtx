@@ -19,6 +19,9 @@
 #include "drivers/baseband/HR_C6000.h"
 #include "drivers/baseband/SKY72310.h"
 #include "drivers/baseband/AK2365A.h"
+#ifdef PLATFORM_CS7000P
+#include "drivers/baseband/dmr_CS7000.h"
+#endif
 
 #ifdef PLATFORM_CS7000P
 #define DAC     DAC1
@@ -230,6 +233,18 @@ void radio_setOpmode(const enum opmode mode)
             C6000.setModFactor(0x25);
             break;
 
+        case OPMODE_DMR:
+            // TODO: entirely unverified against real hardware. See dmrMode()
+            // in HR_C6000_CS7000.cpp for open questions on vocoder routing.
+            // TODO: dmr_init() is idempotent-ish but is never paired with a
+            // dmr_terminate() call when switching to another opmode -- fine
+            // for a single-mode bring-up test, not for real mode switching.
+#ifdef PLATFORM_CS7000P
+            dmr_init();
+            C6000.dmrMode();
+#endif
+            break;
+
         default:
             break;
     }
@@ -293,6 +308,28 @@ void radio_enableRx()
     // Start sampling of CTCSS signal, if enabled
     if((config->opMode == OPMODE_FM) && (config->rxToneEn == true))
         stm32_adc_audio_driver.start(STM32_ADC_ADC3, (void *) ADC_CTCSS_CH, &ctcssCtx);
+
+    /*
+     * OPEN QUESTION, not resolved by the schematic alone: for FM/M17, the
+     * external AK2365A chip does the actual FM demodulation and its
+     * recovered audio is fed to the HR_C6000 as an analog input. The
+     * MD-UV3x0 dmrMode() reference configures the HR_C6000 for "IF mode"
+     * reception (reg 0x01 = 0xF0), which suggests DMR expects the raw IF
+     * signal on the HR_C6000's own ADC_IVINP/QVINN pins instead, with the
+     * chip doing its own digital demod -- i.e. a DIFFERENT signal path than
+     * FM/M17 use, not just a different interpretation of the same recovered
+     * audio. Whether that IF tap is actually wired to the HR_C6000 on this
+     * board (as opposed to only to the AK2365A) needs to be confirmed by
+     * continuity-checking IFOUT / ADC_IVINP against the physical board --
+     * the schematic text extraction wasn't reliable enough to settle this.
+     */
+    if(config->opMode == OPMODE_DMR)
+    {
+        // TODO: AK2365A_init()/setFilterBandwidth() as-is are tuned for FM
+        // channel bandwidths; DMR's 4FSK IF path likely needs different
+        // filter bandwidth selection, if the AK2365A is even in the loop
+        // for this mode at all (see comment above).
+    }
 
     radioStatus = RX;
 }

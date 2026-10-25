@@ -1,0 +1,34 @@
+name: "CS7000-PLUS DMR (no codec)"
+# Builds the flat CS7000-PLUS image with the DMR receive mode enabled.  The
+# AMBE+2 codec is NOT included (it is Connect Systems' code): merge it in
+# locally with scripts/cs7000_codec_extract.py, see
+# platform/drivers/vocoder/README.md.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "cs7000p-dmr" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Compile using devcontainer
+        uses: devcontainers/ci@v0.3
+        with:
+          cacheFrom: ghcr.io/openrtx/openrtx-devcontainer
+          push: never
+          runCmd: |
+            meson setup --cross-file cross_cm7.txt -Dcs7000_ambe=true build_cm7_dmr &&
+            meson compile -C build_cm7_dmr openrtx_cs7000p_bin &&
+            chmod -R a+rX build_cm7_dmr
+      - name: Upload flat image
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx_cs7000p_dmr_flat
+          path: build_cm7_dmr/openrtx_cs7000p_bin
+          if-no-files-found: error

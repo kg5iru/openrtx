@@ -569,6 +569,7 @@ cs7000p_src = ['platform/drivers/NVM/nvmem_CS7000.c',
                'platform/drivers/baseband/HR_Cx000.cpp',
                'platform/drivers/baseband/HR_C6000_CS7000.cpp',
                'platform/drivers/baseband/radio_CS7000.cpp',
+               'platform/drivers/baseband/dmr_CS7000.cpp',
                'platform/drivers/baseband/AK2365A.c',
                'platform/drivers/baseband/SKY72310.c',
                'platform/drivers/audio/Cx000_dac.cpp',
@@ -585,6 +586,17 @@ cs7000p_src = ['platform/drivers/NVM/nvmem_CS7000.c',
 
 cs7000p_inc = ['platform/targets/CS7000-PLUS']
 cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime'}
+
+# Optional AMBE+2 vocoder glue.  The codec itself is not part of OpenRTX: it is
+# extracted from the user's own Connect Systems firmware, see
+# platform/drivers/vocoder/README.md
+if get_option('cs7000_ambe')
+  cs7000p_src += ['platform/drivers/vocoder/ambe_cs7000.c',
+                  'platform/drivers/baseband/dmr_audio_CS7000.cpp',
+                  'platform/drivers/baseband/OpMode_DMR_CS7000.cpp']
+  cs7000p_inc += ['platform/drivers/vocoder', 'platform/drivers/baseband']
+  cs7000p_def += {'CS7000_AMBE': '', 'CONFIG_DMR_CS7000': ''}
+endif
 
 cs7000p_src += openrtx_src + stm32h743_src + miosix_cm7_src + ui_src_default
 cs7000p_inc += openrtx_inc + stm32h743_inc + miosix_cm7_inc

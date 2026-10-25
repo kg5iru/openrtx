@@ -49,7 +49,9 @@ ENTRY(_Z13Reset_Handlerv)
 /* specify the memory areas  */
 MEMORY
 {
-    flash(rx)   : ORIGIN = 0x08100000, LENGTH = 1M
+    /* The upper half of bank 2 (0x08180000..) is reserved for the optional
+     * AMBE+2 codec blob, see platform/drivers/vocoder/README.md */
+    flash(rx)   : ORIGIN = 0x08100000, LENGTH = 512K
 
     /* NOTE: for now wer support only the AXI SRAM */
     ram(wx)     : ORIGIN = 0x24000200, LENGTH =  512K-0x200

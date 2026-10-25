@@ -145,10 +145,55 @@ void HR_Cx000< M >::setModOffset(const uint16_t offset)
     writeReg(M::CONFIG, 0x04, sigCenter);   // Bias value for TX, Q-channel
 }
 
+/*
+ * DMR sync pattern loaded into AUX page 1 @0x04 by the stock firmware when it
+ * enters DMR mode (fn 0x0802C4EC; two other 6-byte patterns at 0x080F54C4 and
+ * 0x080F54CC are selected by other configuration bits and are not used here).
+ */
+static const uint8_t dmrSyncSeq[] =
+{
+    0x01, 0x04, 0xD5, 0xD7, 0xF7, 0x7F, 0xD7, 0x57
+};
+
 template< class M >
 void HR_Cx000< M >::dmrMode()
 {
+    /*
+     * Follows Connect Systems' V9.00.96 "enter DMR mode" routine (fn
+     * 0x0802AD44), the branch that loads sync pattern 0x080F54BC, sets
+     * reg 0x10 = 0x6A and reg 0x5F = 0x80.  The stock code picks other
+     * register 0x10 values (0x6B, 0x6C, 0x6D) and reg 0x5F values (0x30, 0xC0)
+     * depending on two configuration bits whose meaning is not yet known
+     * (presumably relay/repeater/time-slot options); those are NOT handled.
+     *
+     * NOTE: there is no dedicated vocoder chip on this board.  The HR_C6000
+     * exchanges 72-bit AMBE+2 frames with the MCU over V_SPI (reg 0x06 = 0x21,
+     * set in init()), and the MCU runs the codec: see drivers/vocoder.
+     *
+     * Not yet verified on hardware.
+     */
 
+    writeReg(M::CONFIG, 0x00, 0x3F);    // Reset DMR and physical layer
+    sendSequence(dmrSyncSeq, sizeof(dmrSyncSeq));
+    writeReg(M::CONFIG, 0x10, 0x6A);    // Layer 2 DMR mode
+    writeReg(M::CONFIG, 0x5F, 0x80);    // Undocumented, stock value for this branch
+    writeReg(M::CONFIG, 0x81, 0xFF);    // InterClass1Mask, all interrupts enabled
+
+    // Start passive reception (same steps as the stock helper at 0x0802CF54)
+    writeReg(M::CONFIG, 0x40, 0x03);
+    writeReg(M::CONFIG, 0x41, 0x20);    // SyncFail = 1: search again
+    writeReg(M::CONFIG, 0x41, 0x00);
+    writeReg(M::CONFIG, 0x41, 0x40);    // RxNxtSlotEn
+    writeReg(M::CONFIG, 0x40, 0x43);    // RxEn, receive synchronisation active
+
+    writeReg(M::AUX, 0x24, 0x00);       // Same four AUX registers fmMode() clears
+    writeReg(M::AUX, 0x25, 0x00);
+    writeReg(M::AUX, 0x26, 0x00);
+    writeReg(M::AUX, 0x27, 0x00);
+    writeReg(M::CONFIG, 0x64, 0x10);    // Undocumented register
+
+    // Colour code in the upper nibble. TODO: take it from rtxStatus_t / codeplug.
+    writeReg(M::CONFIG, 0x1F, 0x10);    // Colour code 1
 }
 
 template< class M >

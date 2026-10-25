@@ -107,7 +107,7 @@
 #define I2S_TX        GPIOC,12
 
 #define DMR_TS_INT    GPIOC,0
-#define DMR_SYS_INT   GPIOC,1
+#define DMR_SYS_INT   GPIOC,3   // SYS_INTER; schematic net + stock GPIOC pins 0/2/3 falling-edge IT
 #define DMR_TX_INT    GPIOC,2
 
 /* AK2365 */
