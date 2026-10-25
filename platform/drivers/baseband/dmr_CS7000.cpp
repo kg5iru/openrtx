@@ -47,11 +47,11 @@
 
 // Local, hardcoded matches for first bring-up. TODO: pull from rtxStatus_t.
 static constexpr uint8_t LOCAL_COLOUR_CODE = 0x01;
-static constexpr uint8_t LOCAL_SLOT_BIT    = 0;   // stock cfg+0x34 bit4; which slot this is is unconfirmed
+static constexpr uint8_t LOCAL_SLOT_BIT =
+    0; // stock cfg+0x34 bit4; which slot this is is unconfirmed
 static bool windowSwap = false;
 
-enum class DmrRxState
-{
+enum class DmrRxState {
     LISTENING,       // Waiting for a matching voice/data header (sys_inter)
     VOICE_HEADER_OK, // Header matched, waiting for next slot boundary
     VOICE_RX         // Steady-state: toggling RX on/off every other slot
@@ -82,19 +82,18 @@ static uint8_t missedSlots = 0;
 
 void _Z16EXTI0_IRQHandlerv()
 {
-    if((EXTI->PR1 & EXTI_PR1_PR0) == 0)
+    if ((EXTI->PR1 & EXTI_PR1_PR0) == 0)
         return;
 
     EXTI->PR1 = EXTI_PR1_PR0;
 
     uint8_t sync = C6000.readCfgRegister(0x5F);
-    if(sync & 0x03)
-    {
+    if (sync & 0x03) {
         missedSlots = 0;
         return;
     }
 
-    if(++missedSlots < SYNC_LOSS_SLOTS)
+    if (++missedSlots < SYNC_LOSS_SLOTS)
         return;
 
     missedSlots = 0;
@@ -124,11 +123,10 @@ void _Z16EXTI0_IRQHandlerv()
 // The stock firmware always acknowledges, even for events it ignores.
 static bool isVoiceSync(const uint8_t *p)
 {
-    static const uint8_t bs[6] = {0x75, 0x5F, 0xD7, 0xDF, 0x75, 0xF7};
-    static const uint8_t ms[6] = {0x7F, 0x7D, 0x5D, 0xD5, 0x7D, 0xFD};
+    static const uint8_t bs[6] = { 0x75, 0x5F, 0xD7, 0xDF, 0x75, 0xF7 };
+    static const uint8_t ms[6] = { 0x7F, 0x7D, 0x5D, 0xD5, 0x7D, 0xFD };
     bool b = true, m = true;
-    for(int i = 0; i < 6; i++)
-    {
+    for (int i = 0; i < 6; i++) {
         b = b && (p[i] == bs[i]);
         m = m && (p[i] == ms[i]);
     }
@@ -150,42 +148,38 @@ static void endCall()
 
 void _Z16EXTI3_IRQHandlerv()
 {
-    if((EXTI->PR1 & EXTI_PR1_PR3) == 0)
+    if ((EXTI->PR1 & EXTI_PR1_PR3) == 0)
         return;
 
     EXTI->PR1 = EXTI_PR1_PR3;
 
     uint8_t flags = C6000.readCfgRegister(0x82);
-    uint8_t sync  = C6000.readCfgRegister(0x5F);
+    uint8_t sync = C6000.readCfgRegister(0x5F);
     uint8_t reg51 = C6000.readCfgRegister(0x51);
     uint8_t reg52 = C6000.readCfgRegister(0x52);
 
-    uint8_t rxCc  = (reg52 >> 4) & 0x0F;
-    uint8_t cls   = reg51 & 0x03;
-    bool    valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
+    uint8_t rxCc = (reg52 >> 4) & 0x0F;
+    uint8_t cls = reg51 & 0x03;
+    bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
 
-    if((flags & 0x08) && valid && (sync & 0x03) && rxCc == LOCAL_COLOUR_CODE)
-    {
-        if(cls == 2)
-        {
+    if ((flags & 0x08) && valid && (sync & 0x03) && rxCc == LOCAL_COLOUR_CODE) {
+        if (cls == 2) {
             uint8_t type = reg51 >> 4;
-            if(type == 1)           // voice LC header
+            if (type == 1) // voice LC header
             {
                 uint8_t lc[9];
                 C6000.readRxBurst(0x00, lc, sizeof(lc));
                 callInfo.flco = lc[0] & 0x3F;
-                callInfo.dst  = be24(&lc[3]);
-                callInfo.src  = be24(&lc[6]);
+                callInfo.dst = be24(&lc[3]);
+                callInfo.src = be24(&lc[6]);
                 // TODO: filter on configured contact / talkgroup.
                 callActive = true;
                 rxState = DmrRxState::VOICE_HEADER_OK;
-            }
-            else if(type == 2)      // terminator with LC
+            } else if (type == 2) // terminator with LC
             {
                 endCall();
             }
-        }
-        else if(callActive)         // voice burst
+        } else if (callActive) // voice burst
         {
             // Two RX RAM windows, 0x30 and 0x60 (36 bytes: 3 header, 6 sync
             // or EMB, 27 voice).  The stock firmware picks the window from
@@ -194,33 +188,28 @@ void _Z16EXTI3_IRQHandlerv()
             // 27 bytes straight from window + 9.
             uint8_t n = (reg51 >> 4) & 0x07;
             uint8_t primary = (LOCAL_SLOT_BIT != 0) ? 0x60 : 0x30;
-            if(windowSwap)
-                primary ^= 0x50;    // 0x60 <-> 0x30 (0x60 ^ 0x50 = 0x30)
+            if (windowSwap)
+                primary ^= 0x50; // 0x60 <-> 0x30 (0x60 ^ 0x50 = 0x30)
 
-            if(n == 0)
-            {
+            if (n == 0) {
                 uint8_t burst[36];
                 C6000.readRxBurst(primary, burst, sizeof(burst));
-                if(!isVoiceSync(&burst[3]))
-                {
+                if (!isVoiceSync(&burst[3])) {
                     uint8_t other = primary ^ 0x50;
                     C6000.readRxBurst(other, burst, sizeof(burst));
-                    if(isVoiceSync(&burst[3]))
-                    {
+                    if (isVoiceSync(&burst[3])) {
                         windowSwap = !windowSwap;
                         primary = other;
                     }
                 }
-                for(int i = 0; i < 27; i++)
+                for (int i = 0; i < 27; i++)
                     voiceBurst[i] = burst[9 + i];
-            }
-            else
-            {
+            } else {
                 C6000.readRxBurst(primary + 9, voiceBurst, 27);
             }
 
-            if(rxState != DmrRxState::VOICE_RX)
-                C6000.writeCfgRegister(0x22, 0x26);   // stock: voice path start
+            if (rxState != DmrRxState::VOICE_RX)
+                C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
 
             voiceBurstReady = true;
             rxState = DmrRxState::VOICE_RX;
@@ -236,7 +225,7 @@ void _Z16EXTI3_IRQHandlerv()
 // hang the NVIC if it fires unexpectedly.
 void _Z16EXTI2_IRQHandlerv()
 {
-    if((EXTI->PR1 & EXTI_PR1_PR2) == 0)
+    if ((EXTI->PR1 & EXTI_PR1_PR2) == 0)
         return;
 
     EXTI->PR1 = EXTI_PR1_PR2;
@@ -246,9 +235,9 @@ void _Z16EXTI2_IRQHandlerv()
 
 void dmr_init()
 {
-    gpio_setMode(DMR_TS_INT,  INPUT);
+    gpio_setMode(DMR_TS_INT, INPUT);
     gpio_setMode(DMR_SYS_INT, INPUT);
-    gpio_setMode(DMR_TX_INT,  INPUT);
+    gpio_setMode(DMR_TX_INT, INPUT);
 
     rxState = DmrRxState::LISTENING;
 
@@ -264,15 +253,14 @@ void dmr_init()
      * the first EXTI consumer on this MCU port, so double check against the
      * reference manual (RM0433), not just by analogy with the F4 code.
      */
-    EXTI->IMR1  |= EXTI_IMR1_IM0  | EXTI_IMR1_IM2  | EXTI_IMR1_IM3;
+    EXTI->IMR1 |= EXTI_IMR1_IM0 | EXTI_IMR1_IM2 | EXTI_IMR1_IM3;
     EXTI->FTSR1 |= EXTI_FTSR1_TR0 | EXTI_FTSR1_TR2 | EXTI_FTSR1_TR3;
     EXTI->RTSR1 &= ~(EXTI_RTSR1_TR0 | EXTI_RTSR1_TR2 | EXTI_RTSR1_TR3);
 
     // DMR_TS_INT/DMR_TX_INT/DMR_SYS_INT are on GPIOC pins 0, 2 and 3
     // (see pinmap.h) -> SYSCFG_EXTICR1, "_PC" selectors.
-    SYSCFG->EXTICR[0] |= SYSCFG_EXTICR1_EXTI0_PC
-                       |  SYSCFG_EXTICR1_EXTI2_PC
-                       |  SYSCFG_EXTICR1_EXTI3_PC;
+    SYSCFG->EXTICR[0] |= SYSCFG_EXTICR1_EXTI0_PC | SYSCFG_EXTICR1_EXTI2_PC
+                       | SYSCFG_EXTICR1_EXTI3_PC;
 
     NVIC_ClearPendingIRQ(EXTI0_IRQn);
     NVIC_ClearPendingIRQ(EXTI3_IRQn);
@@ -304,9 +292,9 @@ void dmr_terminate()
 // fed one at a time to ambe_cs7000_decode().  Returns false if none pending.
 bool dmr_popVoiceBurst(uint8_t out[27])
 {
-    if(!voiceBurstReady)
+    if (!voiceBurstReady)
         return false;
-    for(int i = 0; i < 27; i++)
+    for (int i = 0; i < 27; i++)
         out[i] = voiceBurst[i];
     voiceBurstReady = false;
     return true;
@@ -314,7 +302,7 @@ bool dmr_popVoiceBurst(uint8_t out[27])
 
 bool dmr_getCallInfo(dmrCallInfo_t *out)
 {
-    if(!callActive)
+    if (!callActive)
         return false;
     *out = callInfo;
     return true;

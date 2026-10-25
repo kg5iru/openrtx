@@ -18,7 +18,6 @@
 class OpMode_DMR : public OpMode
 {
 public:
-
     OpMode_DMR();
     ~OpMode_DMR();
 
@@ -34,9 +33,8 @@ public:
     virtual bool rxSquelchOpen() override;
 
 private:
-
-    bool   enterRx;
-    bool   audioOn;
+    bool enterRx;
+    bool audioOn;
     pathId rxAudioPath;
 };
 

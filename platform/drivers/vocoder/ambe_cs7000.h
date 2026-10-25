@@ -32,25 +32,26 @@ extern "C" {
 #endif
 
 #define AMBE_CS7000_FRAME_SAMPLES 160
-#define AMBE_CS7000_FRAME_BYTES   9
+#define AMBE_CS7000_FRAME_BYTES 9
 
-typedef struct
-{
-    uint8_t  state[0x2800];             /* codec working memory (zeroed by init) */
-    int16_t  pcm_in[80];
-    int16_t  pcm_out[80];
-    uint8_t  rx_slot;                   /* rotates 0,1,2 per decoded frame */
+typedef struct {
+    uint8_t state[0x2800]; /* codec working memory (zeroed by init) */
+    int16_t pcm_in[80];
+    int16_t pcm_out[80];
+    uint8_t rx_slot; /* rotates 0,1,2 per decoded frame */
 } __attribute__((aligned(8))) ambe_cs7000_t;
 
 /* true when the relocated codec blob is present at AMBE_BLOB_BASE */
 bool ambe_cs7000_available(void);
 
 void ambe_cs7000_init(ambe_cs7000_t *c);
-void ambe_cs7000_encode(ambe_cs7000_t *c, const int16_t pcm[AMBE_CS7000_FRAME_SAMPLES],
+void ambe_cs7000_encode(ambe_cs7000_t *c,
+                        const int16_t pcm[AMBE_CS7000_FRAME_SAMPLES],
                         uint8_t out[AMBE_CS7000_FRAME_BYTES]);
 /* returns the codec's bit-error indication for the frame (0 = clean) */
-int  ambe_cs7000_decode(ambe_cs7000_t *c, const uint8_t in[AMBE_CS7000_FRAME_BYTES],
-                        int16_t pcm[AMBE_CS7000_FRAME_SAMPLES]);
+int ambe_cs7000_decode(ambe_cs7000_t *c,
+                       const uint8_t in[AMBE_CS7000_FRAME_BYTES],
+                       int16_t pcm[AMBE_CS7000_FRAME_SAMPLES]);
 
 #ifdef __cplusplus
 }

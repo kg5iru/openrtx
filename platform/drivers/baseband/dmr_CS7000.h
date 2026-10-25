@@ -26,11 +26,10 @@ void dmr_init();
 void dmr_terminate();
 
 /** Link control of the call being received. */
-typedef struct
-{
-    uint8_t  flco;    ///< 0 = group voice, 3 = unit-to-unit voice
-    uint32_t dst;     ///< destination ID (talkgroup or radio)
-    uint32_t src;     ///< source radio ID
+typedef struct {
+    uint8_t flco; ///< 0 = group voice, 3 = unit-to-unit voice
+    uint32_t dst; ///< destination ID (talkgroup or radio)
+    uint32_t src; ///< source radio ID
 } dmrCallInfo_t;
 
 /** Returns false when no call is being received. */

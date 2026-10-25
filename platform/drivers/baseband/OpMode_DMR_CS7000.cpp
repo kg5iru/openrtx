@@ -31,8 +31,7 @@ void OpMode_DMR::disable()
     platform_ledOff(GREEN);
     platform_ledOff(RED);
 
-    if(audioOn)
-    {
+    if (audioOn) {
         dmrAudio_stop();
         audioPath_release(rxAudioPath);
         audioOn = false;
@@ -45,10 +44,9 @@ void OpMode_DMR::disable()
 
 void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
 {
-    (void) newCfg;
+    (void)newCfg;
 
-    if((status->opStatus == OFF) && enterRx)
-    {
+    if ((status->opStatus == OFF) && enterRx) {
         radio_disableRtx();
         radio_enableRx();
         status->opStatus = RX;
@@ -57,15 +55,15 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         // Open the speaker path for the lifetime of the mode; the audio
         // thread plays silence between calls.
         rxAudioPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
-        if((rxAudioPath > 0) && dmrAudio_start(rxAudioPath))
+        if ((rxAudioPath > 0) && dmrAudio_start(rxAudioPath))
             audioOn = true;
-        else if(rxAudioPath > 0)
+        else if (rxAudioPath > 0)
             audioPath_release(rxAudioPath);
     }
 
     // Transmit is not implemented: ignore PTT.
 
-    if(rxSquelchOpen())
+    if (rxSquelchOpen())
         platform_ledOn(GREEN);
     else
         platform_ledOff(GREEN);
