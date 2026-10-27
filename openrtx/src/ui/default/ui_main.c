@@ -144,11 +144,19 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                           color_white, "DMR idle");
             }
 
-            // Raw receive diagnostics: SYS irqs, bursts, headers / sync, 0x51, CC
-            gfx_print(layout.line4_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                      color_white, "%u %u %u %02X %02X c%u",
-                      (unsigned) dbg.irqSys, (unsigned) dbg.bursts,
-                      (unsigned) dbg.headers, dbg.sync, dbg.reg51, dbg.cc);
+            // Live chip registers (0x40 0x41 0x81 0x5F 0x1F 0x21) and the levels
+            // of the three interrupt pins
+            gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                      color_white, "%02X %02X %02X %02X %02X %02X p%X",
+                      dbg.r40, dbg.r41, dbg.r81, dbg.r5f, dbg.r1f, dbg.r21,
+                      dbg.pins);
+
+            // Interrupts: slot, system / bursts / headers / last 0x51 / CC
+            gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
+                      color_white, "%u %u %u %u %02X c%u",
+                      (unsigned) dbg.irqSlot, (unsigned) dbg.irqSys,
+                      (unsigned) dbg.bursts, (unsigned) dbg.headers,
+                      dbg.reg51, dbg.cc);
             #endif
             break;
         }

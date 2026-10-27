@@ -52,6 +52,9 @@ typedef struct {
 
 void dmr_getDebug(dmrDebug_t *out);
 
+/** Read the chip registers and interrupt pins for the diagnostics; thread context. */
+void dmr_pollDiag();
+
 /** Pop the last received voice burst (27 bytes = 3 AMBE+2 frames). */
 bool dmr_popVoiceBurst(uint8_t out[27]);
 

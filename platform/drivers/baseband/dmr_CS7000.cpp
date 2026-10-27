@@ -327,4 +327,24 @@ void dmr_getDebug(dmrDebug_t *out)
     out->sync = dbg.sync;
     out->reg51 = dbg.reg51;
     out->cc = dbg.cc;
+    out->r40 = dbg.r40;
+    out->r41 = dbg.r41;
+    out->r81 = dbg.r81;
+    out->r5f = dbg.r5f;
+    out->r1f = dbg.r1f;
+    out->r21 = dbg.r21;
+    out->pins = dbg.pins;
+}
+
+void dmr_pollDiag()
+{
+    dbg.r40 = C6000.readCfgRegister(0x40);
+    dbg.r41 = C6000.readCfgRegister(0x41);
+    dbg.r81 = C6000.readCfgRegister(0x81);
+    dbg.r5f = C6000.readCfgRegister(0x5F);
+    dbg.r1f = C6000.readCfgRegister(0x1F);
+    dbg.r21 = C6000.readCfgRegister(0x21);
+    dbg.pins = (gpio_readPin(DMR_TS_INT) ? 1 : 0)
+             | (gpio_readPin(DMR_TX_INT) ? 2 : 0)
+             | (gpio_readPin(DMR_SYS_INT) ? 4 : 0);
 }

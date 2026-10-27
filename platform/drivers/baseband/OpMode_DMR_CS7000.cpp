@@ -63,6 +63,8 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
 
     // Transmit is not implemented: ignore PTT.
 
+    dmr_pollDiag();
+
     if (rxSquelchOpen())
         platform_ledOn(GREEN);
     else
