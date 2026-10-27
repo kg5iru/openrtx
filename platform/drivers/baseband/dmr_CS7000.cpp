@@ -88,6 +88,7 @@ static uint8_t voiceBurst[27];
 static volatile bool voiceBurstReady = false;
 static volatile bool callActive = false;
 static dmrCallInfo_t callInfo;
+static volatile dmrDebug_t dbg;
 
 /*
  * Name of interrupt handlers is mangled for C++ compatibility, following
@@ -112,6 +113,7 @@ void _Z16EXTI0_IRQHandlerv()
         return;
 
     EXTI->PR1 = EXTI_PR1_PR0;
+    dbg.irqSlot++;
 
     uint8_t sync = C6000.readCfgRegister(0x5F);
     if (sync & 0x03) {
@@ -172,6 +174,12 @@ void _Z16EXTI3_IRQHandlerv()
     uint8_t reg52 = C6000.readCfgRegister(0x52);
 
     uint8_t rxCc = (reg52 >> 4) & 0x0F;
+    dbg.irqSys++;
+    dbg.sync = sync;
+    dbg.reg51 = reg51;
+    dbg.cc = rxCc;
+    if (flags & 0x08)
+        dbg.bursts++;
     uint8_t cls = reg51 & 0x03;
     bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
 
@@ -187,6 +195,7 @@ void _Z16EXTI3_IRQHandlerv()
                 callInfo.src = be24(&lc[6]);
                 // TODO: filter on configured contact / talkgroup.
                 callActive = true;
+                dbg.headers++;
                 rxState = DmrRxState::VOICE_HEADER_OK;
             } else if (type == 2) // terminator with LC
             {
@@ -298,4 +307,15 @@ bool dmr_getCallInfo(dmrCallInfo_t *out)
         return false;
     *out = callInfo;
     return true;
+}
+
+void dmr_getDebug(dmrDebug_t *out)
+{
+    out->irqSys = dbg.irqSys;
+    out->irqSlot = dbg.irqSlot;
+    out->bursts = dbg.bursts;
+    out->headers = dbg.headers;
+    out->sync = dbg.sync;
+    out->reg51 = dbg.reg51;
+    out->cc = dbg.cc;
 }

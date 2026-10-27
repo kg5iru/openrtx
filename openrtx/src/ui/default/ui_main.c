@@ -14,6 +14,9 @@
 #include "ui/ui_strings.h"
 #include "core/utils.h"
 #include "ui/utils.h"
+#ifdef CONFIG_DMR_CS7000
+#include "dmr_CS7000.h"
+#endif
 
 void _ui_drawMainBackground()
 {
@@ -121,10 +124,34 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             break;
 
         case OPMODE_DMR:
-            // Print talkgroup
-            gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                    color_white, "DMR TG%s", "");
+        {
+            #ifdef CONFIG_DMR_CS7000
+            dmrCallInfo_t call;
+            dmrDebug_t dbg;
+            dmr_getDebug(&dbg);
+
+            if(dmr_getCallInfo(&call))
+            {
+                gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "ID %lu", (unsigned long) call.src);
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "%s %lu", (call.flco == 0) ? "TG" : "ID",
+                          (unsigned long) call.dst);
+            }
+            else
+            {
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "DMR idle");
+            }
+
+            // Raw receive diagnostics: SYS irqs, bursts, headers / sync, 0x51, CC
+            gfx_print(layout.line4_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                      color_white, "%u %u %u %02X %02X c%u",
+                      (unsigned) dbg.irqSys, (unsigned) dbg.bursts,
+                      (unsigned) dbg.headers, dbg.sync, dbg.reg51, dbg.cc);
+            #endif
             break;
+        }
 
         #ifdef CONFIG_M17
         case OPMODE_M17:
