@@ -177,6 +177,8 @@ void EXTI3_IRQHandler()
 
     uint8_t rxCc = (reg52 >> 4) & 0x0F;
     dbg.irqSys++;
+    dbg.flagsLast = flags;
+    dbg.flagsOr |= flags;
     dbg.sync = sync;
     dbg.reg51 = reg51;
     dbg.cc = rxCc;
@@ -334,10 +336,18 @@ void dmr_getDebug(dmrDebug_t *out)
     out->r1f = dbg.r1f;
     out->r21 = dbg.r21;
     out->pins = dbg.pins;
+    out->flagsOr = dbg.flagsOr;
+    out->flagsLast = dbg.flagsLast;
+    out->polls = dbg.polls;
 }
 
 void dmr_pollDiag()
 {
+    // The chip registers are reached through a bus without locking, so the
+    // interrupt handlers must not run in the middle of a thread transaction.
+    NVIC_DisableIRQ(EXTI0_IRQn);
+    NVIC_DisableIRQ(EXTI2_IRQn);
+    NVIC_DisableIRQ(EXTI3_IRQn);
     dbg.r40 = C6000.readCfgRegister(0x40);
     dbg.r41 = C6000.readCfgRegister(0x41);
     dbg.r81 = C6000.readCfgRegister(0x81);
@@ -347,4 +357,9 @@ void dmr_pollDiag()
     dbg.pins = (gpio_readPin(DMR_TS_INT) ? 1 : 0)
              | (gpio_readPin(DMR_TX_INT) ? 2 : 0)
              | (gpio_readPin(DMR_SYS_INT) ? 4 : 0);
+    dbg.polls++;
+
+    NVIC_EnableIRQ(EXTI0_IRQn);
+    NVIC_EnableIRQ(EXTI2_IRQn);
+    NVIC_EnableIRQ(EXTI3_IRQn);
 }

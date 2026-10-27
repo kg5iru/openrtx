@@ -151,12 +151,17 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                       dbg.r40, dbg.r41, dbg.r81, dbg.r5f, dbg.r1f, dbg.r21,
                       dbg.pins);
 
-            // Interrupts: slot, system / bursts / headers / last 0x51 / CC
+            // Interrupts: slot, system, flags ORed / last, heartbeat
             gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
-                      color_white, "%u %u %u %u %02X c%u",
+                      color_white, "%u %u %02X %02X %u",
                       (unsigned) dbg.irqSlot, (unsigned) dbg.irqSys,
-                      (unsigned) dbg.bursts, (unsigned) dbg.headers,
-                      dbg.reg51, dbg.cc);
+                      dbg.flagsOr, dbg.flagsLast, (unsigned) dbg.polls);
+
+            // Bursts, headers, last burst status, colour code
+            if(!dmr_getCallInfo(&call))
+                gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "b%u h%u s%02X c%u", (unsigned) dbg.bursts,
+                          (unsigned) dbg.headers, dbg.reg51, dbg.cc);
             #endif
             break;
         }
