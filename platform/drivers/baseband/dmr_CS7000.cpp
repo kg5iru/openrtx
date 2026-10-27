@@ -107,7 +107,7 @@ static void endCall();
 static constexpr uint8_t SYNC_LOSS_SLOTS = 13;
 static uint8_t missedSlots = 0;
 
-void _Z16EXTI0_IRQHandlerv()
+void EXTI0_IRQHandler()
 {
     if ((EXTI->PR1 & EXTI_PR1_PR0) == 0)
         return;
@@ -161,7 +161,7 @@ static void endCall()
     rxState = DmrRxState::LISTENING;
 }
 
-void _Z16EXTI3_IRQHandlerv()
+void EXTI3_IRQHandler()
 {
     if ((EXTI->PR1 & EXTI_PR1_PR3) == 0)
         return;
@@ -227,7 +227,7 @@ void _Z16EXTI3_IRQHandlerv()
 // boundary so the MCU can key the RF chain in time. Unused in this RX-only
 // pass -- stubbed so the interrupt is at least acknowledged and doesn't
 // hang the NVIC if it fires unexpectedly.
-void _Z16EXTI2_IRQHandlerv()
+void EXTI2_IRQHandler()
 {
     if ((EXTI->PR1 & EXTI_PR1_PR2) == 0)
         return;
@@ -261,6 +261,11 @@ void dmr_init()
     EXTI->IMR1 |= EXTI_IMR1_IM0 | EXTI_IMR1_IM2 | EXTI_IMR1_IM3;
     EXTI->FTSR1 |= EXTI_FTSR1_TR0 | EXTI_FTSR1_TR2 | EXTI_FTSR1_TR3;
     EXTI->RTSR1 &= ~(EXTI_RTSR1_TR0 | EXTI_RTSR1_TR2 | EXTI_RTSR1_TR3);
+
+    // SYSCFG sits on the APB4 bus of the H7 and its clock is off after reset;
+    // without it the EXTI line routing below is silently ignored.
+    RCC->APB4ENR |= RCC_APB4ENR_SYSCFGEN;
+    (void) RCC->APB4ENR;
 
     // DMR_TS_INT/DMR_TX_INT/DMR_SYS_INT are on GPIOC pins 0, 2 and 3
     // (see pinmap.h) -> SYSCFG_EXTICR1, "_PC" selectors.
