@@ -265,7 +265,7 @@ void dmr_init()
     // SYSCFG sits on the APB4 bus of the H7 and its clock is off after reset;
     // without it the EXTI line routing below is silently ignored.
     RCC->APB4ENR |= RCC_APB4ENR_SYSCFGEN;
-    (void) RCC->APB4ENR;
+    (void)RCC->APB4ENR;
 
     // DMR_TS_INT/DMR_TX_INT/DMR_SYS_INT are on GPIOC pins 0, 2 and 3
     // (see pinmap.h) -> SYSCFG_EXTICR1, "_PC" selectors.
