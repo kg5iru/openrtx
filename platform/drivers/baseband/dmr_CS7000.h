@@ -52,6 +52,11 @@ typedef struct {
     uint8_t flagsOr;   ///< every SYS_INTER flag bit seen (0x82, ORed)
     uint8_t flagsLast; ///< 0x82 of the last SYS_INTER
     uint32_t polls;    ///< diagnostic polls done, a heartbeat
+    uint32_t nVoice;   ///< valid voice-class bursts
+    uint32_t nData;    ///< valid data-class bursts
+    uint8_t v51;       ///< 0x51 of the last valid burst
+    uint8_t lastType;  ///< data type of the last valid data burst
+    uint8_t lc[9];     ///< RX RAM bytes read at the last valid data burst
     uint8_t pins;      ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
 } dmrDebug_t;
 

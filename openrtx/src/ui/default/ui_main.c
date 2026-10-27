@@ -144,12 +144,11 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                           color_white, "DMR idle");
             }
 
-            // Live chip registers (0x40 0x41 0x81 0x5F 0x1F 0x21) and the levels
-            // of the three interrupt pins
+            // Last data burst: type and the 9 bytes read from RX RAM
             gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                      color_white, "%02X %02X %02X %02X %02X %02X p%X",
-                      dbg.r40, dbg.r41, dbg.r81, dbg.r5f, dbg.r1f, dbg.r21,
-                      dbg.pins);
+                      color_white, "t%X %02X%02X%02X %02X%02X%02X %02X%02X%02X",
+                      dbg.lastType, dbg.lc[0], dbg.lc[1], dbg.lc[2], dbg.lc[3],
+                      dbg.lc[4], dbg.lc[5], dbg.lc[6], dbg.lc[7], dbg.lc[8]);
 
             // Interrupts: slot, system, flags ORed / last, heartbeat
             gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
@@ -160,8 +159,10 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             // Bursts, headers, last burst status, colour code
             if(!dmr_getCallInfo(&call))
                 gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "b%u h%u s%02X c%u", (unsigned) dbg.bursts,
-                          (unsigned) dbg.headers, dbg.reg51, dbg.cc);
+                          color_white, "b%u h%u v%u d%u s%02X c%u",
+                          (unsigned) dbg.bursts, (unsigned) dbg.headers,
+                          (unsigned) dbg.nVoice, (unsigned) dbg.nData,
+                          dbg.v51, dbg.cc);
             #endif
             break;
         }

@@ -184,12 +184,17 @@ void EXTI3_IRQHandler()
     if (valid) {
         // No software colour code filter: the chip gates on register 0x1F, and
         // only repeaters (CACH) ever report a received code at all.
+        dbg.v51 = reg51;
         if (cls == 2) {
             uint8_t type = reg51 >> 4;
+            uint8_t lc[9];
+            C6000.readRxBurst(0x00, lc, sizeof(lc));
+            dbg.nData++;
+            dbg.lastType = type;
+            for (int i = 0; i < 9; i++)
+                dbg.lc[i] = lc[i];
             if (type == 1) // voice LC header
             {
-                uint8_t lc[9];
-                C6000.readRxBurst(0x00, lc, sizeof(lc));
                 callInfo.flco = lc[0] & 0x3F;
                 callInfo.dst = be24(&lc[3]);
                 callInfo.src = be24(&lc[6]);
@@ -201,7 +206,10 @@ void EXTI3_IRQHandler()
             {
                 endCall();
             }
-        } else if (callActive) // voice burst
+        } else {
+            dbg.nVoice++;
+        }
+        if (cls == 1 && callActive) // voice burst
         {
             // Voice bytes come from V_SPI (see vspiReadVoice).  The RX RAM
             // windows (0x30/0x60) are not the codec input in the stock
@@ -330,6 +338,12 @@ void dmr_getDebug(dmrDebug_t *out)
     out->r1f = dbg.r1f;
     out->r21 = dbg.r21;
     out->pins = dbg.pins;
+    out->nVoice = dbg.nVoice;
+    out->nData = dbg.nData;
+    out->v51 = dbg.v51;
+    out->lastType = dbg.lastType;
+    for (int i = 0; i < 9; i++)
+        out->lc[i] = dbg.lc[i];
     out->flagsOr = dbg.flagsOr;
     out->flagsLast = dbg.flagsLast;
     out->polls = dbg.polls;
