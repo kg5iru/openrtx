@@ -178,6 +178,26 @@ void HR_Cx000< M >::dmrMode()
     writeReg(M::CONFIG, 0x10, 0x6A);    // Layer 2 DMR mode
     writeReg(M::CONFIG, 0x5F, 0x80);    // Undocumented, stock value for this branch
     writeReg(M::CONFIG, 0x81, 0xFF);    // InterClass1Mask, all interrupts enabled
+    writeReg(M::CONFIG, 0x11, 0x80);    // LocalChanMode = 1
+
+    /*
+     * Data link layer configuration, taken from the MD-UV3x0 DMR work
+     * (turnrye/OpenRTX dmr-poc), which found that without it the chip decodes
+     * voice and link control but never reports the received colour code, and
+     * that the colour code register gates reception only once it is in place.
+     * Same HR_C6000, bench-tested there; not yet tried on the CS7000.  Register
+     * 0x36 is left as fmMode() set it, the POC's value for it is unproven here.
+     */
+    writeReg(M::CONFIG, 0x0D, 0x10);    // Voice superframe timeout
+    writeReg(M::CONFIG, 0x0E, 0x8E);    // Documented as reserved
+    writeReg(M::CONFIG, 0x0F, 0xB8);    // FSK error count
+    writeReg(M::CONFIG, 0x13, 0x00);    // Cend_Band timing advance, zeroed
+    writeReg(M::CONFIG, 0x20, 0x00);    // Local access policy, impolite
+    writeReg(M::CONFIG, 0x21, 0xA0);    // Access policy, polite to colour code
+    writeReg(M::CONFIG, 0x2E, 0x04);    // tx_pre_on, 400 us transmission advance
+    writeReg(M::CONFIG, 0x4B, 0x1B);    // Data packet types, default
+    writeReg(M::CONFIG, 0x4C, 0x00);    // Data packet types, default
+    writeReg(M::CONFIG, 0x00, 0x3F);    // Restart the DMR modules with this configuration
 
     // Start passive reception (same steps as the stock helper at 0x0802CF54)
     writeReg(M::CONFIG, 0x40, 0x03);

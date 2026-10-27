@@ -169,9 +169,11 @@ void _Z16EXTI3_IRQHandlerv()
     EXTI->PR1 = EXTI_PR1_PR3;
 
     uint8_t flags = C6000.readCfgRegister(0x82);
-    uint8_t sync = C6000.readCfgRegister(0x5F);
-    uint8_t reg51 = C6000.readCfgRegister(0x51);
+    // Flags first: reading the other status registers consumes the master
+    // flag that announced them (order as in the stock firmware).
     uint8_t reg52 = C6000.readCfgRegister(0x52);
+    uint8_t reg51 = C6000.readCfgRegister(0x51);
+    uint8_t sync = C6000.readCfgRegister(0x5F);
 
     uint8_t rxCc = (reg52 >> 4) & 0x0F;
     dbg.irqSys++;
@@ -183,7 +185,9 @@ void _Z16EXTI3_IRQHandlerv()
     uint8_t cls = reg51 & 0x03;
     bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
 
-    if ((flags & 0x08) && valid && (sync & 0x03) && rxCc == LOCAL_COLOUR_CODE) {
+    if ((flags & 0x08) && valid && (sync & 0x03)) {
+        // No software colour code filter: the chip gates on register 0x1F, and
+        // only repeaters (CACH) ever report a received code at all.
         if (cls == 2) {
             uint8_t type = reg51 >> 4;
             if (type == 1) // voice LC header
