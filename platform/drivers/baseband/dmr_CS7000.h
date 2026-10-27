@@ -10,6 +10,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Configure GPIO/EXTI for the HR_C6000's three DMR-related interrupt lines
  * (DMR_TS_INT, DMR_SYS_INT, DMR_TX_INT) and enable the corresponding NVIC
@@ -50,5 +54,9 @@ void dmr_getDebug(dmrDebug_t *out);
 
 /** Pop the last received voice burst (27 bytes = 3 AMBE+2 frames). */
 bool dmr_popVoiceBurst(uint8_t out[27]);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* DMR_CS7000_H */
