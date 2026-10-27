@@ -992,15 +992,31 @@ static void _ui_fsm_menuMacro(kbd_msg_t msg, bool *sync_rtx)
             }
             break;
         case 5:
-            // Cycle through radio modes
-            #ifdef CONFIG_M17
-            if(state.channel.mode == OPMODE_FM)
-                state.channel.mode = OPMODE_M17;
-            else if(state.channel.mode == OPMODE_M17)
-                state.channel.mode = OPMODE_FM;
-            else //catch any invalid states so they don't get locked out
-            #endif
-                state.channel.mode = OPMODE_FM;
+            // Cycle through radio modes: FM -> M17 -> DMR -> FM, skipping
+            // the modes that are not built in
+            switch(state.channel.mode)
+            {
+                case OPMODE_FM:
+                    #ifdef CONFIG_M17
+                    state.channel.mode = OPMODE_M17;
+                    #elif defined(CONFIG_DMR_CS7000)
+                    state.channel.mode = OPMODE_DMR;
+                    #endif
+                    break;
+                #ifdef CONFIG_M17
+                case OPMODE_M17:
+                    #ifdef CONFIG_DMR_CS7000
+                    state.channel.mode = OPMODE_DMR;
+                    #else
+                    state.channel.mode = OPMODE_FM;
+                    #endif
+                    break;
+                #endif
+                default:
+                    // Also catches invalid states so they don't get locked out
+                    state.channel.mode = OPMODE_FM;
+                    break;
+            }
             *sync_rtx = true;
             vp_announceRadioMode(state.channel.mode, queueFlags);
             break;
