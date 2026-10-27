@@ -48,6 +48,8 @@ typedef struct {
     uint8_t sync;     ///< last 0x5F
     uint8_t reg51;    ///< last 0x51
     uint8_t cc;       ///< last received colour code (0x52[7:4])
+    uint8_t r40, r41, r81, r5f, r1f, r21; ///< live register readback
+    uint8_t pins; ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
 } dmrDebug_t;
 
 void dmr_getDebug(dmrDebug_t *out);
