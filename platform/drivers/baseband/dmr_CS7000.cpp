@@ -104,8 +104,6 @@ static volatile dmrDebug_t dbg;
 //   0x41=0; 0x40=0x03; 0x41=0x20; 0x41=0x40; 0x40=0x43; 0x5F=0x30
 static void endCall();
 
-static constexpr uint8_t SYNC_LOSS_SLOTS = 13;
-static uint8_t missedSlots = 0;
 
 void EXTI0_IRQHandler()
 {
@@ -115,23 +113,16 @@ void EXTI0_IRQHandler()
     EXTI->PR1 = EXTI_PR1_PR0;
     dbg.irqSlot++;
 
-    uint8_t sync = C6000.readCfgRegister(0x5F);
-    if (sync & 0x03) {
-        missedSlots = 0;
-        return;
-    }
-
-    if (++missedSlots < SYNC_LOSS_SLOTS)
-        return;
-
-    missedSlots = 0;
-    C6000.writeCfgRegister(0x41, 0x00);
-    C6000.writeCfgRegister(0x40, 0x03);
-    C6000.writeCfgRegister(0x41, 0x20);
-    C6000.writeCfgRegister(0x41, 0x40);
-    C6000.writeCfgRegister(0x40, 0x43);
-    C6000.writeCfgRegister(0x5F, 0x30);
-    endCall();
+    // A receive request covers a single slot: the chip receives that slot and
+    // then falls idle unless a fresh request is queued before the next
+    // boundary (OpenGD77 and the MD-UV3x0 DMR work both re-arm it from the
+    // slot interrupt).  0x50 = receive with the layer 2 access bit set.
+    // Not doing this left the receiver deaf after the first slot.
+    //
+    // The stock "13 slots without sync, re-arm everything" routine is not
+    // used: run on an idle channel it restarts the receiver about every
+    // 0.4 s, and it rewrote the sync enable register (0x5F) to 0x30.
+    C6000.writeCfgRegister(0x41, 0x50);
 }
 
 // DMR_SYS_INT / SYS_INTER (GPIOC,3 -> EXTI3): "something happened, go read
