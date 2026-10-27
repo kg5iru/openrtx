@@ -176,7 +176,10 @@ void HR_Cx000< M >::dmrMode()
     writeReg(M::CONFIG, 0x00, 0x3F);    // Reset DMR and physical layer
     sendSequence(dmrSyncSeq, sizeof(dmrSyncSeq));
     writeReg(M::CONFIG, 0x10, 0x6A);    // Layer 2 DMR mode
-    writeReg(M::CONFIG, 0x5F, 0x80);    // Undocumented, stock value for this branch
+    // Sync pattern detection.  Stock uses 0x80 for this branch, but the MD-UV3x0
+    // DMR work (dmr-poc, same chip) uses 0xF0 = mobile, base station, TDMA1 and
+    // TDMA2 sequences, which a hotspot or repeater needs.
+    writeReg(M::CONFIG, 0x5F, 0xF0);
     writeReg(M::CONFIG, 0x81, 0xFF);    // InterClass1Mask, all interrupts enabled
     writeReg(M::CONFIG, 0x11, 0x80);    // LocalChanMode = 1
 
