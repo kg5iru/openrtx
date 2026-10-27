@@ -37,13 +37,13 @@ bool dmr_getCallInfo(dmrCallInfo_t *out);
 
 /** Raw receive diagnostics, to see on screen what the HR_C6000 reports. */
 typedef struct {
-    uint32_t irqSys;   ///< SYS_INTER interrupts seen
-    uint32_t irqSlot;  ///< TIME_SLOT_INTER interrupts seen
-    uint32_t bursts;   ///< SYS_INTER with the "burst received" flag
-    uint32_t headers;  ///< voice LC headers decoded
-    uint8_t sync;      ///< last 0x5F
-    uint8_t reg51;     ///< last 0x51
-    uint8_t cc;        ///< last received colour code (0x52[7:4])
+    uint32_t irqSys;  ///< SYS_INTER interrupts seen
+    uint32_t irqSlot; ///< TIME_SLOT_INTER interrupts seen
+    uint32_t bursts;  ///< SYS_INTER with the "burst received" flag
+    uint32_t headers; ///< voice LC headers decoded
+    uint8_t sync;     ///< last 0x5F
+    uint8_t reg51;    ///< last 0x51
+    uint8_t cc;       ///< last received colour code (0x52[7:4])
 } dmrDebug_t;
 
 void dmr_getDebug(dmrDebug_t *out);
