@@ -172,12 +172,16 @@ void EXTI3_IRQHandler()
     dbg.sync = sync;
     dbg.reg51 = reg51;
     dbg.cc = rxCc;
-    if (flags & 0x08)
-        dbg.bursts++;
     uint8_t cls = reg51 & 0x03;
     bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
+    if (valid)
+        dbg.bursts++;
 
-    if ((flags & 0x08) && valid && (sync & 0x03)) {
+    // Every system interrupt is treated as a frame event and judged by the
+    // burst status alone, as the MD-UV3x0 DMR work does.  Gating on flag 0x08
+    // (what the stock firmware's dispatcher keys on) never opened here: only
+    // 0x02 and 0x04 were ever seen in 0x82.
+    if (valid) {
         // No software colour code filter: the chip gates on register 0x1F, and
         // only repeaters (CACH) ever report a received code at all.
         if (cls == 2) {
