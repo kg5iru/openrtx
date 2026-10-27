@@ -303,7 +303,12 @@ void radio_enableRx()
 
     // Configure FM detector
     AK2365A_init(&detector);
-    AK2365A_setFilterBandwidth(&detector, AK2365A_BPF_6);
+    // The stock firmware never programs the 6 kHz setting.  For a 12.5 kHz
+    // channel it writes AK2365A reg 0x01 = 0xE5, i.e. the 4.5 kHz filter
+    // (routine at 0x080842EA, picked by channel bandwidth bit 2 in the config);
+    // use that for DMR, which is 12.5 kHz only.
+    AK2365A_setFilterBandwidth(&detector,
+        (config->opMode == OPMODE_DMR) ? AK2365A_BPF_4p5 : AK2365A_BPF_6);
 
     // Start sampling of CTCSS signal, if enabled
     if((config->opMode == OPMODE_FM) && (config->rxToneEn == true))
