@@ -288,7 +288,12 @@ void radio_enableRx()
     gpioDev_clear(TX_PWR_EN);     // Disable TX PA
     gpioDev_clear(RF_APC_SW);     // APC/TV used for RX filter tuning
     gpioDev_set(VCOVCC_SW);       // Enable RX VCO
-    gpioDev_set(CTCSS_AMP_EN);    // Enable CTCSS filter/amplifier
+    // CTCSS filter/amplifier: the stock firmware switches it off on a
+    // digital channel (expander line 22 = 0 in the DMR channel load).
+    if(config->opMode == OPMODE_DMR)
+        gpioDev_clear(CTCSS_AMP_EN);
+    else
+        gpioDev_set(CTCSS_AMP_EN);
     gpioDev_set(DET_PDN);         // Enable FM detector
 
     // Set PLL frequency
@@ -426,6 +431,15 @@ void radio_updateConfiguration()
     // HR_C6000 modulation amplitude
     uint8_t qAmp = interpParameter(config->txFrequency, calData.txCalFreq, calData.txDigitalPathQ);
     uint8_t iAmp = interpParameter(config->txFrequency, calData.txCalFreq, calData.txAnalogPathI);
+
+    // On a digital channel the stock firmware takes these two from the
+    // calibration bytes at 0x10B4 and 0x10BC instead (fn 0x0805F0FC, called
+    // from the DMR channel load at 0x0804C0BE / 0x0804C0D4).
+    if(config->opMode == OPMODE_DMR)
+    {
+        qAmp = interpParameter(config->txFrequency, calData.txCalFreq, calData.mskFreqOffset);
+        iAmp = interpParameter(config->txFrequency, calData.txCalFreq, calData.txDigitalPathI);
+    }
     C6000.writeCfgRegister(0x45, qAmp);   // Adjustment of Mod2 amplitude
     C6000.writeCfgRegister(0x46, iAmp);   // Adjustment of Mod1 amplitude
 

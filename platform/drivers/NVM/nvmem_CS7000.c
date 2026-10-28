@@ -119,6 +119,8 @@ void nvm_readCalibData(void *buf)
     nvm_read(0, 1, 0x1044, &(calData->rxSensitivity),  sizeof(calData->rxSensitivity));
     nvm_read(0, 1, 0x106C, &(calData->txHighPwr),      sizeof(calData->txHighPwr));
     nvm_read(0, 1, 0x1074, &(calData->txMiddlePwr),    sizeof(calData->txMiddlePwr));
+    nvm_read(0, 1, 0x10B4, &(calData->mskFreqOffset),  sizeof(calData->mskFreqOffset));
+    nvm_read(0, 1, 0x10BC, &(calData->txDigitalPathI), sizeof(calData->txDigitalPathI));
     nvm_read(0, 1, 0x10C4, &(calData->txDigitalPathQ), sizeof(calData->txDigitalPathQ));
     nvm_read(0, 1, 0x10CC, &(calData->txAnalogPathI),  sizeof(calData->txAnalogPathI));
     nvm_read(0, 1, 0x10DC, &(calData->errorRate),      sizeof(calData->errorRate));

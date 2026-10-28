@@ -184,6 +184,19 @@ void HR_Cx000< M >::dmrMode()
     writeReg(M::CONFIG, 0x11, 0x80);    // LocalChanMode = 1
 
     /*
+     * Receive front end for a digital channel, as the stock channel load does
+     * it (HOST V9.00.96, fn 0x0804B390, pure-DMR branch at 0x0804BE90):
+     * tones off, then 0x35/0x3E/0x3F as in FM but reg 0x34 = 0xA0 instead of
+     * FM's 0xBC.  Without this, DMR inherited fmMode()'s 0xBC, i.e. the FM
+     * voice band-pass and de-emphasis in front of the 4FSK demodulator.
+     */
+    writeReg(M::CONFIG, 0xA1, 0x00);    // Tones off
+    writeReg(M::CONFIG, 0x35, 0x20);
+    writeReg(M::CONFIG, 0x3E, 0x06);
+    writeReg(M::CONFIG, 0x34, 0xA0);    // Stock value for digital channels
+    writeReg(M::CONFIG, 0x3F, 0x04);
+
+    /*
      * Data link layer configuration, taken from the MD-UV3x0 DMR work
      * (turnrye/OpenRTX dmr-poc), which found that without it the chip decodes
      * voice and link control but never reports the received colour code, and
