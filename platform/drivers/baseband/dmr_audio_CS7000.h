@@ -8,6 +8,7 @@
 #define DMR_AUDIO_CS7000_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "core/audio_path.h"
 
 #ifdef __cplusplus
@@ -26,6 +27,10 @@ bool dmrAudio_start(const pathId path);
 
 /** Stop the thread and wait for it to terminate. */
 void dmrAudio_stop();
+
+/** Diagnostics: decoder thread state (0 off, 1 running, 2 codec initialised) and voice frames decoded. */
+uint8_t dmrAudio_state();
+unsigned dmrAudio_frames();
 
 #ifdef __cplusplus
 }

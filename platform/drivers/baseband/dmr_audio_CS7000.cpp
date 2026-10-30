@@ -31,19 +31,21 @@
 
 #define FRAME_SAMPLES AMBE_CS7000_FRAME_SAMPLES
 #define DMA_BUF_SAMPLES (FRAME_SAMPLES * 2)
-#define DEC_STACK_SIZE 6144   /* codec needs 4.2 kB, measured */
+#define DEC_STACK_SIZE 16384  /* codec needs 4.2 kB measured; same as Codec2 */
 
 static ambe_cs7000_t decoder; /* ~10 kB, too big for the stack */
 static pthread_t thread;
 static volatile bool running = false;
 static volatile bool reqStop = false;
 static pathId outPath;
+static volatile unsigned framesDecoded = 0;
+static volatile uint8_t decState = 0;
 
 static void *decodeThread(void *arg)
 {
     (void)arg;
 
-    int16_t audioBuf[DMA_BUF_SAMPLES];
+    static int16_t audioBuf[DMA_BUF_SAMPLES];
     memset(audioBuf, 0x00, sizeof(audioBuf));
 
     streamId oStream = audioStream_start(outPath, audioBuf, DMA_BUF_SAMPLES,
@@ -53,13 +55,17 @@ static void *decodeThread(void *arg)
         return NULL;
     }
 
-    ambe_cs7000_init(&decoder);
+    // The codec is initialised on the first voice burst, not here, so that a
+    // fault in the codec and a fault in the audio stream can be told apart
+    // on the radio (a crash with no DMR traffic is not the codec).
+    bool codecReady = false;
 
     uint8_t frames[27];
     uint8_t next = 3; // index of the next frame to decode, 3 = none left
 
     // Avoid writing to the buffer while the stream is reading it.
     outputStream_sync(oStream, false);
+    decState = 1;
 
     while (!reqStop) {
         if (audioPath_getStatus(outPath) != PATH_OPEN)
@@ -72,9 +78,16 @@ static void *decodeThread(void *arg)
         if (buf == NULL)
             break;
 
+        if (next < 3 && !codecReady) {
+            ambe_cs7000_init(&decoder);
+            codecReady = true;
+            decState = 2;
+        }
+
         if (next < 3) {
             ambe_cs7000_decode(&decoder,
                                &frames[next * AMBE_CS7000_FRAME_BYTES], buf);
+            framesDecoded++;
             next += 1;
         } else {
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
@@ -84,6 +97,7 @@ static void *decodeThread(void *arg)
     }
 
     audioStream_stop(oStream);
+    decState = 0;
     running = false;
     return NULL;
 }
@@ -102,7 +116,7 @@ bool dmrAudio_start(const pathId path)
     pthread_attr_setstacksize(&attr, DEC_STACK_SIZE);
 
     struct sched_param param;
-    param.sched_priority = THREAD_PRIO_RT;
+    param.sched_priority = THREAD_PRIO_HIGH; // as the Codec2 thread
     pthread_attr_setschedparam(&attr, &param);
 
     if (pthread_create(&thread, &attr, decodeThread, NULL) != 0) {
@@ -122,7 +136,27 @@ void dmrAudio_stop()
     pthread_join(thread, NULL);
 }
 
+uint8_t dmrAudio_state()
+{
+    return decState;
+}
+
+unsigned dmrAudio_frames()
+{
+    return framesDecoded;
+}
+
 #else /* !CS7000_AMBE */
+
+uint8_t dmrAudio_state()
+{
+    return 0;
+}
+
+unsigned dmrAudio_frames()
+{
+    return 0;
+}
 
 bool dmrAudio_start(const pathId path)
 {

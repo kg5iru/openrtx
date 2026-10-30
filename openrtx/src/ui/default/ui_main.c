@@ -16,6 +16,7 @@
 #include "ui/utils.h"
 #ifdef CONFIG_DMR_CS7000
 #include "dmr_CS7000.h"
+#include "dmr_audio_CS7000.h"
 #endif
 
 void _ui_drawMainBackground()
@@ -141,7 +142,8 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             else
             {
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "DMR idle");
+                          color_white, "DMR idle a%u f%u",
+                          (unsigned) dmrAudio_state(), dmrAudio_frames());
             }
 
             // Last data burst: type and the 9 bytes read from RX RAM
