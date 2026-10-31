@@ -57,9 +57,10 @@ typedef struct {
     uint8_t v51;       ///< 0x51 of the last valid burst
     uint8_t lastType;  ///< data type of the last valid data burst
     uint8_t lc[9];     ///< RX RAM bytes read at the last valid data burst
-    uint32_t
-        vDropped; ///< voice bursts overwritten before the audio thread took them
-    uint8_t pins; ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
+    /// voice bursts overwritten before the audio thread took them
+    uint32_t vDropped;
+    uint32_t vFlagged; ///< voice bursts with 0x51 bit 2 set (kept)
+    uint8_t pins;      ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
 } dmrDebug_t;
 
 void dmr_getDebug(dmrDebug_t *out);
