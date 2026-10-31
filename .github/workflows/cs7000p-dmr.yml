@@ -8,6 +8,15 @@ on:
   push:
     branches: [ "cs7000p-dmr" ]
 
+# The build environment (devcontainer image with the Miosix GCC toolchain,
+# compiled from source) takes about 25 minutes to build, the firmware itself
+# a few seconds.  The image is pushed to this account's GitHub container
+# registry and reused as the build cache, so it is only rebuilt when
+# .devcontainer/ changes.
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -17,11 +26,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Log in to the GitHub container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile using devcontainer
         uses: devcontainers/ci@v0.3
         with:
-          cacheFrom: ghcr.io/openrtx/openrtx-devcontainer
-          push: never
+          imageName: ghcr.io/kg5iru/openrtx-devcontainer
+          cacheFrom: ghcr.io/kg5iru/openrtx-devcontainer
+          push: always
           runCmd: |
             meson setup --cross-file cross_cm7.txt -Dcs7000_ambe=true build_cm7_dmr &&
             meson compile -C build_cm7_dmr openrtx_cs7000p_bin &&
