@@ -46,6 +46,11 @@
 #include "drivers/baseband/dmr_CS7000.h"
 #include "peripherals/spi.h"
 #include "drivers/SPI/spi_stm32.h"
+#include <pthread.h>
+#include <miosix.h>
+#include <kernel/scheduler/scheduler.h>
+
+using namespace miosix;
 
 /*
  * Voice payload port (V_SPI).  The stock firmware reads the 27 voice bytes
@@ -108,24 +113,24 @@ static volatile dmrDebug_t dbg;
 //   0x41=0; 0x40=0x03; 0x41=0x20; 0x41=0x40; 0x40=0x43; 0x5F=0x30
 static void endCall();
 
-void EXTI0_IRQHandler()
+static uint8_t slotsSinceVoice = 0;
+
+static void handleSlot()
 {
-    if ((EXTI->PR1 & EXTI_PR1_PR0) == 0)
-        return;
-
-    EXTI->PR1 = EXTI_PR1_PR0;
-    dbg.irqSlot++;
-
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
-    // boundary (OpenGD77 and the MD-UV3x0 DMR work both re-arm it from the
-    // slot interrupt).  0x50 = receive with the layer 2 access bit set.
-    // Not doing this left the receiver deaf after the first slot.
+    // boundary (OpenGD77 and the MD-UV3x0 DMR work both re-arm it every
+    // slot).  0x50 = receive with the layer 2 access bit set.  Not doing this
+    // left the receiver deaf after the first slot.
     //
     // The stock "13 slots without sync, re-arm everything" routine is not
     // used: run on an idle channel it restarts the receiver about every
     // 0.4 s, and it rewrote the sync enable register (0x5F) to 0x30.
     C6000.writeCfgRegister(0x41, 0x50);
+
+    // End a call whose terminator was missed: no voice for 20 slots (600 ms).
+    if (callActive && (++slotsSinceVoice >= 20))
+        endCall();
 }
 
 // DMR_SYS_INT / SYS_INTER (GPIOC,3 -> EXTI3): "something happened, go read
@@ -155,13 +160,8 @@ static void endCall()
     rxState = DmrRxState::LISTENING;
 }
 
-void EXTI3_IRQHandler()
+static void handleSys()
 {
-    if ((EXTI->PR1 & EXTI_PR1_PR3) == 0)
-        return;
-
-    EXTI->PR1 = EXTI_PR1_PR3;
-
     uint8_t flags = C6000.readCfgRegister(0x82);
     // Flags first: reading the other status registers consumes the master
     // flag that announced them (order as in the stock firmware).
@@ -170,7 +170,6 @@ void EXTI3_IRQHandler()
     uint8_t sync = C6000.readCfgRegister(0x5F);
 
     uint8_t rxCc = (reg52 >> 4) & 0x0F;
-    dbg.irqSys++;
     dbg.flagsLast = flags;
     dbg.flagsOr |= flags;
     dbg.sync = sync;
@@ -204,6 +203,7 @@ void EXTI3_IRQHandler()
                 callInfo.src = be24(&lc[6]);
                 // TODO: filter on configured contact / talkgroup.
                 callActive = true;
+                slotsSinceVoice = 0;
                 dbg.headers++;
                 rxState = DmrRxState::VOICE_HEADER_OK;
             } else if (type == 2) // terminator with LC
@@ -229,6 +229,7 @@ void EXTI3_IRQHandler()
                 C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
 
             vHead = nh;
+            slotsSinceVoice = 0;
             rxState = DmrRxState::VOICE_RX;
         }
     }
@@ -240,6 +241,97 @@ void EXTI3_IRQHandler()
 // boundary so the MCU can key the RF chain in time. Unused in this RX-only
 // pass -- stubbed so the interrupt is at least acknowledged and doesn't
 // hang the NVIC if it fires unexpectedly.
+/*
+ * Interrupt handling.  The HR_C6000 is reached through the U_SPI bus, which
+ * is protected by a pthread mutex (ScopedChipSelect), so its registers must
+ * not be touched from an interrupt: doing so crashed the radio now and then
+ * when an interrupt hit while a thread held the bus.  As in the stock
+ * firmware (whose ISRs only release RTOS semaphores), the interrupts just
+ * record what happened and wake a high priority worker thread, which does
+ * all the chip access.
+ */
+static constexpr uint32_t EV_SLOT = 1;
+static constexpr uint32_t EV_SYS = 2;
+static volatile uint32_t pending = 0;
+static volatile bool dmrRunning = false;
+static Thread *waiting = nullptr;
+static pthread_t worker;
+static bool workerStarted = false;
+
+static void wakeWorker(uint32_t ev)
+{
+    pending |= ev;
+    if (waiting == nullptr)
+        return;
+    waiting->IRQwakeup();
+    if (waiting->IRQgetPriority()
+        > Thread::IRQgetCurrentThread()->IRQgetPriority())
+        Scheduler::IRQfindNextThread();
+    waiting = nullptr;
+}
+
+extern "C" void dmrSlotIrqImpl()
+{
+    EXTI->PR1 = EXTI_PR1_PR0;
+    dbg.irqSlot++;
+    wakeWorker(EV_SLOT);
+}
+
+extern "C" void dmrSysIrqImpl()
+{
+    EXTI->PR1 = EXTI_PR1_PR3;
+    dbg.irqSys++;
+    wakeWorker(EV_SYS);
+}
+
+// Naked wrappers so that the scheduler can switch to the worker on return
+// (same pattern as the MD-3x0 display DMA interrupt).
+void __attribute__((naked)) EXTI0_IRQHandler()
+{
+    saveContext();
+    asm volatile("bl dmrSlotIrqImpl");
+    restoreContext();
+}
+
+void __attribute__((naked)) EXTI3_IRQHandler()
+{
+    saveContext();
+    asm volatile("bl dmrSysIrqImpl");
+    restoreContext();
+}
+
+static void *dmrWorker(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        uint32_t ev;
+        {
+            FastInterruptDisableLock dLock;
+            while (pending == 0) {
+                waiting = Thread::IRQgetCurrentThread();
+                Thread::IRQwait();
+                {
+                    FastInterruptEnableLock eLock(dLock);
+                    Thread::yield();
+                }
+            }
+            ev = pending;
+            pending = 0;
+        }
+
+        if (!dmrRunning)
+            continue;
+
+        if (ev & EV_SYS)
+            handleSys();
+        if (ev & EV_SLOT)
+            handleSlot();
+    }
+
+    return NULL;
+}
+
 void EXTI2_IRQHandler()
 {
     if ((EXTI->PR1 & EXTI_PR1_PR2) == 0)
@@ -252,6 +344,19 @@ void EXTI2_IRQHandler()
 
 void dmr_init()
 {
+    if (!workerStarted) {
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 4096);
+        struct sched_param param;
+        param.sched_priority = PRIORITY_MAX - 1; // above every OpenRTX thread
+        pthread_attr_setschedparam(&attr, &param);
+        if (pthread_create(&worker, &attr, dmrWorker, NULL) == 0)
+            workerStarted = true;
+    }
+    pending = 0;
+    dmrRunning = true;
+
     gpio_setMode(DMR_TS_INT, INPUT);
     gpio_setMode(DMR_SYS_INT, INPUT);
     gpio_setMode(DMR_TX_INT, INPUT);
@@ -304,6 +409,7 @@ void dmr_init()
 
 void dmr_terminate()
 {
+    dmrRunning = false;
     NVIC_DisableIRQ(EXTI0_IRQn);
     NVIC_DisableIRQ(EXTI3_IRQn);
     NVIC_DisableIRQ(EXTI2_IRQn);
