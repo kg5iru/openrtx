@@ -161,9 +161,9 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                         // Codec fine: FEC errors total / last frame, voice
                         // bursts dropped, silent buffers during a call
                         gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                                  color_white, "E%u e%u d%lu g%u", dmrAudio_errTotal(),
-                                  dmrAudio_errLast(), (unsigned long) dbg.vDropped,
-                                  dmrAudio_gaps());
+                                  color_white, "E%u d%lu g%u k%lu", dmrAudio_errTotal(),
+                                  (unsigned long) dbg.vDropped, dmrAudio_gaps(),
+                                  (unsigned long) dbg.vFlagged);
                     if(ck->badKb != 0)
                         gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
                                   color_white, "%05lX-%05lX %02X%02X%02X%02X",

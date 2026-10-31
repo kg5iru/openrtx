@@ -171,7 +171,14 @@ static void handleSys()
     dbg.reg51 = reg51;
     dbg.cc = rxCc;
     uint8_t cls = reg51 & 0x03;
-    bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
+    // Bit 2 is the chip's check result.  For data bursts it is the CRC and a
+    // set bit means the burst is unusable.  Voice bursts, though, came with
+    // bit 2 set about half of the time (0x45, 0xC5 seen on air) and were
+    // thrown away, which chopped the audio; a voice burst has no CRC of its
+    // own, so it is kept and the codec's FEC judges its frames.
+    bool valid = (cls == 1) || ((cls == 2) && ((reg51 & 0x04) == 0));
+    if ((cls == 1) && (reg51 & 0x04))
+        dbg.vFlagged++;
     if (valid)
         dbg.bursts++;
 
@@ -398,6 +405,7 @@ void dmr_getDebug(dmrDebug_t *out)
     out->r21 = dbg.r21;
     out->pins = dbg.pins;
     out->vDropped = dbg.vDropped;
+    out->vFlagged = dbg.vFlagged;
     out->nVoice = dbg.nVoice;
     out->nData = dbg.nData;
     out->v51 = dbg.v51;
