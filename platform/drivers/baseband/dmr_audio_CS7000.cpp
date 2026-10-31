@@ -45,6 +45,8 @@ static volatile unsigned errLast = 0;
 static volatile unsigned gaps = 0;
 static volatile unsigned errPos[3] = { 0, 0, 0 };
 static volatile unsigned badFrames = 0;
+static volatile unsigned vFrames[DMR_VARIANTS];
+static volatile unsigned vBad[DMR_VARIANTS];
 
 static void *decodeThread(void *arg)
 {
@@ -107,6 +109,12 @@ static void *decodeThread(void *arg)
             errPos[next] += (unsigned)e;
             if (e >= 4)
                 badFrames++;
+            {
+                uint8_t v = dmr_variant() % DMR_VARIANTS;
+                vFrames[v]++;
+                if (e >= 4)
+                    vBad[v]++;
+            }
             framesDecoded++;
             next += 1;
         } else {
@@ -199,6 +207,16 @@ unsigned dmrAudio_badFrames()
     return badFrames;
 }
 
+unsigned dmrAudio_variantFrames(int v)
+{
+    return vFrames[v];
+}
+
+unsigned dmrAudio_variantBad(int v)
+{
+    return vBad[v];
+}
+
 #else /* !CS7000_AMBE */
 
 uint8_t dmrAudio_state()
@@ -239,6 +257,18 @@ unsigned dmrAudio_errPos(int i)
 
 unsigned dmrAudio_badFrames()
 {
+    return 0;
+}
+
+unsigned dmrAudio_variantFrames(int v)
+{
+    (void)v;
+    return 0;
+}
+
+unsigned dmrAudio_variantBad(int v)
+{
+    (void)v;
     return 0;
 }
 

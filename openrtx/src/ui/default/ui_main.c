@@ -161,10 +161,9 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                         // Codec fine: FEC errors total / last frame, voice
                         // bursts dropped, silent buffers during a call
                         gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                                  color_white, "%u %u %u x%u u%lu",
-                                  dmrAudio_errPos(0), dmrAudio_errPos(1),
-                                  dmrAudio_errPos(2), dmrAudio_badFrames(),
-                                  (unsigned long) dbg.vDup);
+                                  color_white, "A%u/%u B%u/%u",
+                                  dmrAudio_variantBad(0), dmrAudio_variantFrames(0),
+                                  dmrAudio_variantBad(1), dmrAudio_variantFrames(1));
                     if(ck->badKb != 0)
                         gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
                                   color_white, "%05lX-%05lX %02X%02X%02X%02X",
@@ -177,10 +176,12 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             // (the codec check above takes this line when it finds bad blocks)
             const ambe_cs7000_check_t *ck2 = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
             if((ck2 == NULL) || (ck2->badKb == 0))
+            // Register A/B test: bad/total frames for sets C and D
             gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
-                      color_white, "%u %u %02X %02X %u",
-                      (unsigned) dbg.irqSlot, (unsigned) dbg.irqSys,
-                      dbg.flagsOr, dbg.flagsLast, (unsigned) dbg.polls);
+                      color_white, "C%u/%u D%u/%u %c",
+                      dmrAudio_variantBad(2), dmrAudio_variantFrames(2),
+                      dmrAudio_variantBad(3), dmrAudio_variantFrames(3),
+                      'A' + dmr_variant());
 
             // Bursts, headers, last burst status, colour code
             if(!dmr_getCallInfo(&call))

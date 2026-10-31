@@ -41,6 +41,10 @@ unsigned dmrAudio_gaps();
 unsigned dmrAudio_errPos(int i);
 unsigned dmrAudio_badFrames();
 
+/** Diagnostics: frames and frames with 4+ errors under register set v (0..3). */
+unsigned dmrAudio_variantFrames(int v);
+unsigned dmrAudio_variantBad(int v);
+
 /** Diagnostics: integrity check of the codec region (NULL without codec support). */
 const void *dmrAudio_blobCheck();
 

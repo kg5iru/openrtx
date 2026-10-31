@@ -75,6 +75,10 @@ bool dmr_popVoiceBurst(uint8_t out[27]);
 /** Number of voice bursts waiting to be played. */
 unsigned dmr_voiceQueued();
 
+/** Register set under test (A..D = 0..3), switched at the end of every call. */
+#define DMR_VARIANTS 4
+uint8_t dmr_variant();
+
 #ifdef __cplusplus
 }
 #endif

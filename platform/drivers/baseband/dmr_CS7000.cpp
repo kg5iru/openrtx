@@ -148,11 +148,57 @@ static uint32_t be24(const uint8_t *p)
     return (uint32_t(p[0]) << 16) | (uint32_t(p[1]) << 8) | p[2];
 }
 
+/*
+ * A/B test of the demodulator and data link registers, one call at a time.
+ * v22 (GD-77 values) and v23 (stock CS7000 values) gave clearly different
+ * FEC error rates, so instead of one build per guess the radio cycles
+ * through four register sets, switching at the end of every call, and the
+ * DMR screen shows bad/total frames for each.  Set A is what dmrMode() writes
+ * (stock values).
+ */
+struct RegVariant {
+    uint8_t r0E, r0F, r21, r26;
+};
+
+static const RegVariant variants[DMR_VARIANTS] = {
+    { 0x8C, 0xBA, 0x02, 0x7D }, // A: stock CS7000 (v23)
+    { 0x8E, 0xB8, 0xA0, 0xFE }, // B: GD-77 values, FM's 0x26 (v22)
+    { 0x8E, 0xB8, 0xA0, 0x7D }, // C: GD-77 values, stock 0x26
+    { 0x8C, 0xBA, 0x02, 0xFE }, // D: stock values, FM's 0x26
+};
+
+static volatile uint8_t variant = 0;
+
+static void applyVariant(uint8_t v)
+{
+    const RegVariant &r = variants[v];
+    C6000.writeCfgRegister(0x0E, r.r0E);
+    C6000.writeCfgRegister(0x0F, r.r0F);
+    C6000.writeCfgRegister(0x21, r.r21);
+    C6000.writeCfgRegister(0x26, r.r26);
+    C6000.writeCfgRegister(0x00, 0x3F); // restart the DMR modules
+    C6000.writeCfgRegister(0x40,
+                           0x03); // and passive reception, as in dmrMode()
+    C6000.writeCfgRegister(0x41, 0x20);
+    C6000.writeCfgRegister(0x41, 0x00);
+    C6000.writeCfgRegister(0x41, 0x40);
+    C6000.writeCfgRegister(0x40, 0x43);
+    C6000.writeCfgRegister(0x1F, 0x10); // colour code 1
+}
+
+uint8_t dmr_variant()
+{
+    return variant;
+}
+
 static void endCall()
 {
     callActive = false;
     vTail = vHead;
     rxState = DmrRxState::LISTENING;
+
+    variant = (variant + 1) % DMR_VARIANTS;
+    applyVariant(variant);
 }
 
 static void handleSys()
@@ -307,6 +353,7 @@ void EXTI2_IRQHandler()
 
 void dmr_init()
 {
+    variant = 0;
     dmrRunning = true;
 
     gpio_setMode(DMR_TS_INT, INPUT);
