@@ -208,6 +208,13 @@ static void handleSys()
         } else {
             dbg.nVoice++;
         }
+        // Late entry: a voice burst without a header seen (header missed, or
+        // the call was ended early by the timeout) still opens the call, so
+        // its audio is played; the IDs stay those of the last header.
+        if (cls == 1 && !callActive) {
+            callActive = true;
+            slotsSinceVoice = 0;
+        }
         if (cls == 1 && callActive) // voice burst
         {
             // Voice bytes come from V_SPI (see vspiReadVoice).  The RX RAM
