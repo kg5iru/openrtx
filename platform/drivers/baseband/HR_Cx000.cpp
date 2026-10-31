@@ -101,10 +101,45 @@ void HR_Cx000< C6000_SpiOpModes >::setInputGain(int8_t value)
     writeReg(C6000_SpiOpModes::CONFIG, 0xE4, regValue);
 }
 
-ScopedChipSelect::ScopedChipSelect(const struct spiDevice *spi,
-                                   const struct gpioPin& cs) : spi(spi), cs(cs)
+#ifdef PLATFORM_CS7000P
+/*
+ * On the CS7000-PLUS the DMR interrupt handlers read the HR_C6000 status
+ * registers themselves, at the instant of the event (read later, from a
+ * thread, they already describe another burst).  An interrupt handler cannot
+ * take the bus mutex, so instead every thread-side transaction masks the
+ * three DMR interrupt lines while it owns the bus, and the handlers skip the
+ * mutex.  A masked interrupt stays pending and runs right after.
+ */
+static const IRQn_Type dmrIrqs[3] = { EXTI0_IRQn, EXTI2_IRQn, EXTI3_IRQn };
+
+static inline bool inInterrupt()
 {
+    return __get_IPSR() != 0;
+}
+#endif
+
+ScopedChipSelect::ScopedChipSelect(const struct spiDevice *spi,
+                                   const struct gpioPin& cs) : spi(spi), cs(cs),
+                                   fenced(0)
+{
+#ifdef PLATFORM_CS7000P
+    if(inInterrupt() == false)
+    {
+        spi_acquire(spi);
+        for(unsigned int i = 0; i < 3; i++)
+        {
+            if(NVIC_GetEnableIRQ(dmrIrqs[i]))
+            {
+                NVIC_DisableIRQ(dmrIrqs[i]);
+                fenced |= (1u << i);
+            }
+        }
+        __DSB();
+        __ISB();
+    }
+#else
     spi_acquire(spi);
+#endif
     gpioPin_clear(&cs);
 }
 
@@ -116,7 +151,19 @@ ScopedChipSelect::~ScopedChipSelect()
     delayUs(2);
     gpioPin_set(&cs);
     delayUs(2);
+#ifdef PLATFORM_CS7000P
+    if(inInterrupt() == false)
+    {
+        for(unsigned int i = 0; i < 3; i++)
+        {
+            if(fenced & (1u << i))
+                NVIC_EnableIRQ(dmrIrqs[i]);
+        }
+        spi_release(spi);
+    }
+#else
     spi_release(spi);
+#endif
 }
 
 FmConfig operator |(FmConfig lhs, FmConfig rhs)

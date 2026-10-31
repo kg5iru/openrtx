@@ -295,6 +295,7 @@ public:
 private:
     const struct spiDevice *spi;
     const struct gpioPin& cs;
+    unsigned int fenced; ///< DMR interrupt lines masked by this transaction (CS7000-PLUS)
 };
 
 #endif // HRCx000_H

@@ -46,11 +46,6 @@
 #include "drivers/baseband/dmr_CS7000.h"
 #include "peripherals/spi.h"
 #include "drivers/SPI/spi_stm32.h"
-#include <pthread.h>
-#include <miosix.h>
-#include <kernel/scheduler/scheduler.h>
-
-using namespace miosix;
 
 /*
  * Voice payload port (V_SPI).  The stock firmware reads the 27 voice bytes
@@ -242,94 +237,39 @@ static void handleSys()
 // pass -- stubbed so the interrupt is at least acknowledged and doesn't
 // hang the NVIC if it fires unexpectedly.
 /*
- * Interrupt handling.  The HR_C6000 is reached through the U_SPI bus, which
- * is protected by a pthread mutex (ScopedChipSelect), so its registers must
- * not be touched from an interrupt: doing so crashed the radio now and then
- * when an interrupt hit while a thread held the bus.  As in the stock
- * firmware (whose ISRs only release RTOS semaphores), the interrupts just
- * record what happened and wake a high priority worker thread, which does
- * all the chip access.
+ * Interrupt handling.  The status registers must be read at the instant of
+ * the event: v19 did it from a worker thread and the readings already
+ * described other bursts (no voice was ever queued).  The U_SPI bus is
+ * protected by a pthread mutex, which an interrupt cannot take, so on this
+ * target ScopedChipSelect skips the mutex in interrupt context and every
+ * thread-side transaction masks the DMR interrupt lines instead (see
+ * HR_Cx000.cpp).
  */
-static constexpr uint32_t EV_SLOT = 1;
-static constexpr uint32_t EV_SYS = 2;
-static volatile uint32_t pending = 0;
 static volatile bool dmrRunning = false;
-static Thread *waiting = nullptr;
-static pthread_t worker;
-static bool workerStarted = false;
-
-static void wakeWorker(uint32_t ev)
-{
-    pending |= ev;
-    if (waiting == nullptr)
-        return;
-    waiting->IRQwakeup();
-    if (waiting->IRQgetPriority()
-        > Thread::IRQgetCurrentThread()->IRQgetPriority())
-        Scheduler::IRQfindNextThread();
-    waiting = nullptr;
-}
-
 extern "C" void dmrSlotIrqImpl()
 {
     EXTI->PR1 = EXTI_PR1_PR0;
     dbg.irqSlot++;
-    wakeWorker(EV_SLOT);
+    if (dmrRunning)
+        handleSlot();
 }
 
 extern "C" void dmrSysIrqImpl()
 {
     EXTI->PR1 = EXTI_PR1_PR3;
     dbg.irqSys++;
-    wakeWorker(EV_SYS);
+    if (dmrRunning)
+        handleSys();
 }
 
-// Naked wrappers so that the scheduler can switch to the worker on return
-// (same pattern as the MD-3x0 display DMA interrupt).
-void __attribute__((naked)) EXTI0_IRQHandler()
+void EXTI0_IRQHandler()
 {
-    saveContext();
-    asm volatile("bl dmrSlotIrqImpl");
-    restoreContext();
+    dmrSlotIrqImpl();
 }
 
-void __attribute__((naked)) EXTI3_IRQHandler()
+void EXTI3_IRQHandler()
 {
-    saveContext();
-    asm volatile("bl dmrSysIrqImpl");
-    restoreContext();
-}
-
-static void *dmrWorker(void *arg)
-{
-    (void)arg;
-
-    for (;;) {
-        uint32_t ev;
-        {
-            FastInterruptDisableLock dLock;
-            while (pending == 0) {
-                waiting = Thread::IRQgetCurrentThread();
-                Thread::IRQwait();
-                {
-                    FastInterruptEnableLock eLock(dLock);
-                    Thread::yield();
-                }
-            }
-            ev = pending;
-            pending = 0;
-        }
-
-        if (!dmrRunning)
-            continue;
-
-        if (ev & EV_SYS)
-            handleSys();
-        if (ev & EV_SLOT)
-            handleSlot();
-    }
-
-    return NULL;
+    dmrSysIrqImpl();
 }
 
 void EXTI2_IRQHandler()
@@ -344,17 +284,6 @@ void EXTI2_IRQHandler()
 
 void dmr_init()
 {
-    if (!workerStarted) {
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setstacksize(&attr, 4096);
-        struct sched_param param;
-        param.sched_priority = PRIORITY_MAX - 1; // above every OpenRTX thread
-        pthread_attr_setschedparam(&attr, &param);
-        if (pthread_create(&worker, &attr, dmrWorker, NULL) == 0)
-            workerStarted = true;
-    }
-    pending = 0;
     dmrRunning = true;
 
     gpio_setMode(DMR_TS_INT, INPUT);
@@ -398,9 +327,11 @@ void dmr_init()
     // tick than for the status-decode interrupt) -- revisit once there's a
     // scheduler-level view of what else is competing for CPU time during
     // an active call.
-    NVIC_SetPriority(EXTI0_IRQn, 10);
+    // Same priority for all three so that one handler never interrupts
+    // another in the middle of a U_SPI transaction.
+    NVIC_SetPriority(EXTI0_IRQn, 11);
     NVIC_SetPriority(EXTI3_IRQn, 11);
-    NVIC_SetPriority(EXTI2_IRQn, 10);
+    NVIC_SetPriority(EXTI2_IRQn, 11);
 
     NVIC_EnableIRQ(EXTI0_IRQn);
     NVIC_EnableIRQ(EXTI3_IRQn);
