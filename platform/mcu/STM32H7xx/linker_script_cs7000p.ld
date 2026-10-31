@@ -50,8 +50,8 @@ ENTRY(_Z13Reset_Handlerv)
 MEMORY
 {
     /* OpenRTX gets the first 224 kB of the 512 kB OpenRTX slot; the optional
-     * AMBE+2 codec blob sits right after it at 0x08138000 (about 284 kB, up
-     * to 0x0817F0A0), see platform/drivers/vocoder/README.md.  The blob used
+     * AMBE+2 codec blob sits after it at 0x08138800 (about 284 kB, up to
+     * 0x0817F8A0; the first 2 kB after OpenRTX are a zero-filled guard), see platform/drivers/vocoder/README.md.  The blob used
      * to be at 0x08180000, but the vendor updater does not write that part
      * of bank 2 (checked on the radio: wrong contents there). */
     flash(rx)   : ORIGIN = 0x08100000, LENGTH = 0x38000

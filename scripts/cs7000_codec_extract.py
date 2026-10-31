@@ -195,7 +195,7 @@ def build(img, base):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('firmware')
-    ap.add_argument('--base', default='0x08138000', help='flash address of the blob (multiple of 8); must match ambe_cs7000_layout.h')
+    ap.add_argument('--base', default='0x08138800', help='flash address of the blob (multiple of 8); must match ambe_cs7000_layout.h')
     ap.add_argument('--merge', help='OpenRTX flat image (.bin) to append the blob to')
     ap.add_argument('--flash-origin', default='0x08100000', help='flash address the --merge image starts at')
     ap.add_argument('--merged-out', help='output file for --merge')
@@ -247,7 +247,11 @@ def main():
             sys.exit('--merge wants the flat (unwrapped) OpenRTX .bin: its vector table looks wrong')
         if org + len(rt) > base:
             sys.exit('OpenRTX image (0x%x bytes) runs into the codec blob at 0x%08x' % (len(rt), base))
-        open(a.merged_out, 'wb').write(rt + b'\xff' * (base - org - len(rt)) + blob)
+        # The gap between OpenRTX and the blob is filled with zeros, not 0xFF:
+        # on the radio the first 32-byte flash word at 0x08138000 read back
+        # as zeros after flashing with the vendor updater, right after an
+        # all-0xFF gap, so the blob also starts 2 kB later now (0x08138800).
+        open(a.merged_out, 'wb').write(rt + b'\x00' * (base - org - len(rt)) + blob)
         print('merged image: %s (%d bytes)' % (a.merged_out, base - org + len(blob)))
 
 if __name__ == '__main__':
