@@ -44,6 +44,14 @@ typedef struct {
 /* true when the relocated codec blob is present at AMBE_BLOB_BASE */
 bool ambe_cs7000_available(void);
 
+/**
+ * Integrity check of the codec region as it sits in flash, for diagnostics:
+ * offset (from the blob base) just past the last byte that is not 0xFF in
+ * the 512 kB above the base, and the 16 bit byte sum of the first
+ * AMBE_CS7000_BLOB_SIZE bytes.  Computed once and cached.
+ */
+void ambe_cs7000_check(uint32_t *end, uint16_t *sum);
+
 void ambe_cs7000_init(ambe_cs7000_t *c);
 void ambe_cs7000_encode(ambe_cs7000_t *c,
                         const int16_t pcm[AMBE_CS7000_FRAME_SAMPLES],

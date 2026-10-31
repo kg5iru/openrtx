@@ -146,6 +146,22 @@ unsigned dmrAudio_frames()
     return framesDecoded;
 }
 
+uint32_t dmrAudio_blobEnd()
+{
+    uint32_t end;
+    uint16_t sum;
+    ambe_cs7000_check(&end, &sum);
+    return end;
+}
+
+uint16_t dmrAudio_blobSum()
+{
+    uint32_t end;
+    uint16_t sum;
+    ambe_cs7000_check(&end, &sum);
+    return sum;
+}
+
 #else /* !CS7000_AMBE */
 
 uint8_t dmrAudio_state()
@@ -154,6 +170,16 @@ uint8_t dmrAudio_state()
 }
 
 unsigned dmrAudio_frames()
+{
+    return 0;
+}
+
+uint32_t dmrAudio_blobEnd()
+{
+    return 0;
+}
+
+uint16_t dmrAudio_blobSum()
 {
     return 0;
 }

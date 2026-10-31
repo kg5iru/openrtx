@@ -142,8 +142,10 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             else
             {
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "DMR idle a%u f%u",
-                          (unsigned) dmrAudio_state(), dmrAudio_frames());
+                          color_white, "a%u f%u k%05lX %04X",
+                          (unsigned) dmrAudio_state(), dmrAudio_frames(),
+                          (unsigned long) dmrAudio_blobEnd(),
+                          (unsigned) dmrAudio_blobSum());
             }
 
             // Last data burst: type and the 9 bytes read from RX RAM

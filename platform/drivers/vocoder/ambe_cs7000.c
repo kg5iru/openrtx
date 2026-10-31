@@ -72,6 +72,36 @@ bool ambe_cs7000_available(void)
     return *(const volatile uint16_t *)(AMBE_ADDR_ENC_HALF & ~1U) != 0xFFFF;
 }
 
+#define BLOB_BASE (AMBE_ADDR_ENC_HALF & ~0xFFFFU)
+#define BLOB_SIZE 290976U /* ambe_cs7000.bin from HOST V9.00.96 */
+#define REGION_SIZE 0x80000U
+
+void ambe_cs7000_check(uint32_t *end, uint16_t *sum)
+{
+    static bool done = false;
+    static uint32_t cEnd;
+    static uint16_t cSum;
+
+    if (!done) {
+        const volatile uint8_t *p = (const volatile uint8_t *)BLOB_BASE;
+        uint32_t e = 0;
+        uint16_t s = 0;
+        for (uint32_t i = 0; i < REGION_SIZE; i++) {
+            uint8_t b = p[i];
+            if (b != 0xFF)
+                e = i + 1;
+            if (i < BLOB_SIZE)
+                s += b;
+        }
+        cEnd = e;
+        cSum = s;
+        done = true;
+    }
+
+    *end = cEnd;
+    *sum = cSum;
+}
+
 void ambe_cs7000_init(ambe_cs7000_t *c)
 {
     uint8_t *st = c->state;
