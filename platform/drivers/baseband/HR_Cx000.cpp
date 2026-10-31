@@ -116,6 +116,13 @@ static inline bool inInterrupt()
 {
     return __get_IPSR() != 0;
 }
+
+// This CMSIS version has no NVIC_GetEnableIRQ()
+static inline bool irqEnabled(IRQn_Type irq)
+{
+    uint32_t n = static_cast< uint32_t >(irq);
+    return ((NVIC->ISER[n >> 5] >> (n & 0x1F)) & 1u) != 0;
+}
 #endif
 
 ScopedChipSelect::ScopedChipSelect(const struct spiDevice *spi,
@@ -128,7 +135,7 @@ ScopedChipSelect::ScopedChipSelect(const struct spiDevice *spi,
         spi_acquire(spi);
         for(unsigned int i = 0; i < 3; i++)
         {
-            if(NVIC_GetEnableIRQ(dmrIrqs[i]))
+            if(irqEnabled(dmrIrqs[i]))
             {
                 NVIC_DisableIRQ(dmrIrqs[i]);
                 fenced |= (1u << i);
