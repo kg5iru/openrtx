@@ -6,6 +6,7 @@
 
 #include "ambe_cs7000.h"
 #include "ambe_cs7000_layout.h"
+#include "ambe_cs7000_ksums.h"
 #include <string.h>
 
 /* Field offsets inside the codec state block, from the stock init routine
@@ -76,30 +77,45 @@ bool ambe_cs7000_available(void)
 #define BLOB_SIZE AMBE_BLOB_SIZE
 #define REGION_SIZE (0x08180000U - AMBE_BLOB_BASE) /* to the slot end */
 
-void ambe_cs7000_check(uint32_t *end, uint16_t *sum)
+const ambe_cs7000_check_t *ambe_cs7000_check(void)
 {
     static bool done = false;
-    static uint32_t cEnd;
-    static uint16_t cSum;
+    static ambe_cs7000_check_t r;
 
     if (!done) {
         const volatile uint8_t *p = (const volatile uint8_t *)BLOB_BASE;
-        uint32_t e = 0;
-        uint16_t s = 0;
+        r.end = 0;
+        r.sum = 0;
+        r.badKb = 0;
+        r.firstBad = 0xFFFFFFFFU;
+        r.lastBad = 0;
         for (uint32_t i = 0; i < REGION_SIZE; i++) {
-            uint8_t b = p[i];
-            if (b != 0xFF)
-                e = i + 1;
-            if (i < BLOB_SIZE)
-                s += b;
+            if (p[i] != 0xFF)
+                r.end = i + 1;
         }
-        cEnd = e;
-        cSum = s;
+        for (uint32_t k = 0; k < AMBE_BLOB_KSUMS_N; k++) {
+            uint32_t from = k * 1024U;
+            uint32_t to = from + 1024U;
+            if (to > BLOB_SIZE)
+                to = BLOB_SIZE;
+            uint16_t ks = 0;
+            for (uint32_t i = from; i < to; i++)
+                ks += p[i];
+            r.sum += ks;
+            if (ks != ambe_blob_ksums[k]) {
+                r.badKb++;
+                if (r.firstBad == 0xFFFFFFFFU) {
+                    r.firstBad = from;
+                    for (int j = 0; j < 4; j++)
+                        r.bytes[j] = p[from + j];
+                }
+                r.lastBad = from;
+            }
+        }
         done = true;
     }
 
-    *end = cEnd;
-    *sum = cSum;
+    return &r;
 }
 
 void ambe_cs7000_init(ambe_cs7000_t *c)

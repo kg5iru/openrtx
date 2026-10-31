@@ -32,9 +32,8 @@ void dmrAudio_stop();
 uint8_t dmrAudio_state();
 unsigned dmrAudio_frames();
 
-/** Diagnostics: codec region end offset and byte sum as found in flash. */
-uint32_t dmrAudio_blobEnd();
-uint16_t dmrAudio_blobSum();
+/** Diagnostics: integrity check of the codec region (NULL without codec support). */
+const void *dmrAudio_blobCheck();
 
 #ifdef __cplusplus
 }

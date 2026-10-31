@@ -146,20 +146,9 @@ unsigned dmrAudio_frames()
     return framesDecoded;
 }
 
-uint32_t dmrAudio_blobEnd()
+const void *dmrAudio_blobCheck()
 {
-    uint32_t end;
-    uint16_t sum;
-    ambe_cs7000_check(&end, &sum);
-    return end;
-}
-
-uint16_t dmrAudio_blobSum()
-{
-    uint32_t end;
-    uint16_t sum;
-    ambe_cs7000_check(&end, &sum);
-    return sum;
+    return ambe_cs7000_check();
 }
 
 #else /* !CS7000_AMBE */
@@ -174,14 +163,9 @@ unsigned dmrAudio_frames()
     return 0;
 }
 
-uint32_t dmrAudio_blobEnd()
+const void *dmrAudio_blobCheck()
 {
-    return 0;
-}
-
-uint16_t dmrAudio_blobSum()
-{
-    return 0;
+    return NULL;
 }
 
 bool dmrAudio_start(const pathId path)

@@ -17,6 +17,7 @@
 #ifdef CONFIG_DMR_CS7000
 #include "dmr_CS7000.h"
 #include "dmr_audio_CS7000.h"
+#include "ambe_cs7000.h"
 #endif
 
 void _ui_drawMainBackground()
@@ -142,19 +143,31 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             else
             {
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "a%u f%u k%05lX %04X",
-                          (unsigned) dmrAudio_state(), dmrAudio_frames(),
-                          (unsigned long) dmrAudio_blobEnd(),
-                          (unsigned) dmrAudio_blobSum());
+                          color_white, "a%u f%u", (unsigned) dmrAudio_state(),
+                          dmrAudio_frames());
             }
 
-            // Last data burst: type and the 9 bytes read from RX RAM
-            gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                      color_white, "t%X %02X%02X%02X %02X%02X%02X %02X%02X%02X",
-                      dbg.lastType, dbg.lc[0], dbg.lc[1], dbg.lc[2], dbg.lc[3],
-                      dbg.lc[4], dbg.lc[5], dbg.lc[6], dbg.lc[7], dbg.lc[8]);
+            // Codec region check: end offset, sum, bad 1 kB blocks, first
+            // and last bad block offsets, first bytes of the first bad block
+            {
+                const ambe_cs7000_check_t *ck = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
+                if(ck != NULL)
+                {
+                    gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                              color_white, "k%05lX %04X x%u", (unsigned long) ck->end,
+                              (unsigned) ck->sum, (unsigned) ck->badKb);
+                    if(ck->badKb != 0)
+                        gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
+                                  color_white, "%05lX-%05lX %02X%02X%02X%02X",
+                                  (unsigned long) ck->firstBad, (unsigned long) ck->lastBad,
+                                  ck->bytes[0], ck->bytes[1], ck->bytes[2], ck->bytes[3]);
+                }
+            }
 
             // Interrupts: slot, system, flags ORed / last, heartbeat
+            // (the codec check above takes this line when it finds bad blocks)
+            const ambe_cs7000_check_t *ck2 = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
+            if((ck2 == NULL) || (ck2->badKb == 0))
             gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
                       color_white, "%u %u %02X %02X %u",
                       (unsigned) dbg.irqSlot, (unsigned) dbg.irqSys,
