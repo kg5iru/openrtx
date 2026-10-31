@@ -171,12 +171,10 @@ static void handleSys()
     dbg.reg51 = reg51;
     dbg.cc = rxCc;
     uint8_t cls = reg51 & 0x03;
-    // Bit 2 is the chip's check result.  For data bursts it is the CRC and a
-    // set bit means the burst is unusable.  Voice bursts, though, came with
-    // bit 2 set about half of the time (0x45, 0xC5 seen on air) and were
-    // thrown away, which chopped the audio; a voice burst has no CRC of its
-    // own, so it is kept and the codec's FEC judges its frames.
-    bool valid = (cls == 1) || ((cls == 2) && ((reg51 & 0x04) == 0));
+    // Bit 2 set = the chip's check failed.  v21 kept voice bursts with it set
+    // (they are about half of all voice-class events): the codec's FEC errors
+    // per frame doubled, so those are not good voice and are dropped again.
+    bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
     if ((cls == 1) && (reg51 & 0x04))
         dbg.vFlagged++;
     if (valid)
@@ -233,6 +231,17 @@ static void handleSys()
                 vTail = (vTail + 1) % VOICE_FIFO;
             }
             vspiReadVoice(voiceFifo[vHead]);
+            {
+                // Same 27 bytes as the previous burst = stale read
+                const uint8_t *prev =
+                    voiceFifo[(vHead + VOICE_FIFO - 1) % VOICE_FIFO];
+                bool same = true;
+                for (int i = 0; i < 27; i++)
+                    if (prev[i] != voiceFifo[vHead][i])
+                        same = false;
+                if (same)
+                    dbg.vDup++;
+            }
 
             if (rxState != DmrRxState::VOICE_RX)
                 C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
@@ -406,6 +415,7 @@ void dmr_getDebug(dmrDebug_t *out)
     out->pins = dbg.pins;
     out->vDropped = dbg.vDropped;
     out->vFlagged = dbg.vFlagged;
+    out->vDup = dbg.vDup;
     out->nVoice = dbg.nVoice;
     out->nData = dbg.nData;
     out->v51 = dbg.v51;

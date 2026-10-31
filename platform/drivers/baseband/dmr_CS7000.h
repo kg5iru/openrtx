@@ -59,7 +59,8 @@ typedef struct {
     uint8_t lc[9];     ///< RX RAM bytes read at the last valid data burst
     /// voice bursts overwritten before the audio thread took them
     uint32_t vDropped;
-    uint32_t vFlagged; ///< voice bursts with 0x51 bit 2 set (kept)
+    uint32_t vFlagged; ///< voice bursts with 0x51 bit 2 set (dropped)
+    uint32_t vDup;     ///< voice bursts identical to the previous one
     uint8_t pins;      ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
 } dmrDebug_t;
 

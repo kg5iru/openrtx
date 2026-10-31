@@ -37,6 +37,10 @@ unsigned dmrAudio_errTotal();
 unsigned dmrAudio_errLast();
 unsigned dmrAudio_gaps();
 
+/** Diagnostics: FEC errors summed per frame position in the burst (0..2), frames with 4+ errors. */
+unsigned dmrAudio_errPos(int i);
+unsigned dmrAudio_badFrames();
+
 /** Diagnostics: integrity check of the codec region (NULL without codec support). */
 const void *dmrAudio_blobCheck();
 
