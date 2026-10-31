@@ -197,22 +197,27 @@ void HR_Cx000< M >::dmrMode()
     writeReg(M::CONFIG, 0x3F, 0x04);
 
     /*
-     * Data link layer configuration, taken from the MD-UV3x0 DMR work
-     * (turnrye/OpenRTX dmr-poc), which found that without it the chip decodes
-     * voice and link control but never reports the received colour code, and
-     * that the colour code register gates reception only once it is in place.
-     * Same HR_C6000, bench-tested there; not yet tried on the CS7000.  Register
-     * 0x36 is left as fmMode() set it, the POC's value for it is unproven here.
+     * Data link layer and demodulator registers as the stock firmware leaves
+     * them on a DMR channel.  Up to v22 this block used the GD-77 values from
+     * the MD-UV3x0 DMR work (0x0E = 0x8E, 0x0F = 0xB8, 0x21 = 0xA0, ...), and
+     * DMR also inherited fmMode()'s reg 0x26 = 0xFE.  The stock firmware
+     * never rewrites 0x0D..0x0F, 0x23..0x2D after its boot presets (page 4
+     * @0x0D: 10 8C BA ... 0x26 = 0x7D ...), and its DMR channel load does
+     * 0x20 = 0, 0x21 = 1, 0x21 = 2, 0x22 = 0x16, 0x22 = 0x46 (0x0804B4F2).
+     * On air with the GD-77 values about 45% of the AMBE frames had 4 or more
+     * FEC errors.
      */
-    writeReg(M::CONFIG, 0x0D, 0x10);    // Voice superframe timeout
-    writeReg(M::CONFIG, 0x0E, 0x8E);    // Documented as reserved
-    writeReg(M::CONFIG, 0x0F, 0xB8);    // FSK error count
-    writeReg(M::CONFIG, 0x13, 0x00);    // Cend_Band timing advance, zeroed
-    writeReg(M::CONFIG, 0x20, 0x00);    // Local access policy, impolite
-    writeReg(M::CONFIG, 0x21, 0xA0);    // Access policy, polite to colour code
-    writeReg(M::CONFIG, 0x2E, 0x04);    // tx_pre_on, 400 us transmission advance
-    writeReg(M::CONFIG, 0x4B, 0x1B);    // Data packet types, default
-    writeReg(M::CONFIG, 0x4C, 0x00);    // Data packet types, default
+    writeReg(M::CONFIG, 0x0D, 0x10);    // Stock boot preset values
+    writeReg(M::CONFIG, 0x0E, 0x8C);
+    writeReg(M::CONFIG, 0x0F, 0xBA);
+    writeReg(M::CONFIG, 0x13, 0x00);
+    writeReg(M::CONFIG, 0x26, 0x7D);    // Stock preset; fmMode() leaves 0xFE
+    writeReg(M::CONFIG, 0x2E, 0x04);
+    writeReg(M::CONFIG, 0x20, 0x00);    // Stock DMR channel load sequence
+    writeReg(M::CONFIG, 0x21, 0x01);
+    writeReg(M::CONFIG, 0x21, 0x02);
+    writeReg(M::CONFIG, 0x22, 0x16);
+    writeReg(M::CONFIG, 0x22, 0x46);
     writeReg(M::CONFIG, 0x00, 0x3F);    // Restart the DMR modules with this configuration
 
     // Start passive reception (same steps as the stock helper at 0x0802CF54)
