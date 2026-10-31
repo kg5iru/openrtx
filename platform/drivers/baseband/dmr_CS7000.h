@@ -57,7 +57,9 @@ typedef struct {
     uint8_t v51;       ///< 0x51 of the last valid burst
     uint8_t lastType;  ///< data type of the last valid data burst
     uint8_t lc[9];     ///< RX RAM bytes read at the last valid data burst
-    uint8_t pins;      ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
+    uint32_t
+        vDropped; ///< voice bursts overwritten before the audio thread took them
+    uint8_t pins; ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
 } dmrDebug_t;
 
 void dmr_getDebug(dmrDebug_t *out);
@@ -67,6 +69,9 @@ void dmr_pollDiag();
 
 /** Pop the last received voice burst (27 bytes = 3 AMBE+2 frames). */
 bool dmr_popVoiceBurst(uint8_t out[27]);
+
+/** Number of voice bursts waiting to be played. */
+unsigned dmr_voiceQueued();
 
 #ifdef __cplusplus
 }

@@ -32,6 +32,11 @@ void dmrAudio_stop();
 uint8_t dmrAudio_state();
 unsigned dmrAudio_frames();
 
+/** Diagnostics: FEC errors (total, last frame) and silent buffers played during a call. */
+unsigned dmrAudio_errTotal();
+unsigned dmrAudio_errLast();
+unsigned dmrAudio_gaps();
+
 /** Diagnostics: integrity check of the codec region (NULL without codec support). */
 const void *dmrAudio_blobCheck();
 

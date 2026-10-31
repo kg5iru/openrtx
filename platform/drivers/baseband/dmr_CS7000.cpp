@@ -84,8 +84,12 @@ enum class DmrRxState {
 };
 
 static volatile DmrRxState rxState = DmrRxState::LISTENING;
-static uint8_t voiceBurst[27];
-static volatile bool voiceBurstReady = false;
+// Voice bursts waiting for the audio thread: a small FIFO so that a burst
+// arriving while the previous one is still being played is not lost.
+static constexpr uint8_t VOICE_FIFO = 8;
+static uint8_t voiceFifo[VOICE_FIFO][27];
+static volatile uint8_t vHead = 0; // written by the ISR
+static volatile uint8_t vTail = 0; // written by the audio thread
 static volatile bool callActive = false;
 static dmrCallInfo_t callInfo;
 static volatile dmrDebug_t dbg;
@@ -147,7 +151,7 @@ static uint32_t be24(const uint8_t *p)
 static void endCall()
 {
     callActive = false;
-    voiceBurstReady = false;
+    vTail = vHead;
     rxState = DmrRxState::LISTENING;
 }
 
@@ -214,12 +218,17 @@ void EXTI3_IRQHandler()
             // Voice bytes come from V_SPI (see vspiReadVoice).  The RX RAM
             // windows (0x30/0x60) are not the codec input in the stock
             // firmware.
-            vspiReadVoice(voiceBurst);
+            uint8_t nh = (vHead + 1) % VOICE_FIFO;
+            if (nh == vTail) {
+                dbg.vDropped++; // full: drop the oldest
+                vTail = (vTail + 1) % VOICE_FIFO;
+            }
+            vspiReadVoice(voiceFifo[vHead]);
 
             if (rxState != DmrRxState::VOICE_RX)
                 C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
 
-            voiceBurstReady = true;
+            vHead = nh;
             rxState = DmrRxState::VOICE_RX;
         }
     }
@@ -306,12 +315,18 @@ void dmr_terminate()
 // fed one at a time to ambe_cs7000_decode().  Returns false if none pending.
 bool dmr_popVoiceBurst(uint8_t out[27])
 {
-    if (!voiceBurstReady)
+    if (vTail == vHead)
         return false;
+    uint8_t t = vTail;
     for (int i = 0; i < 27; i++)
-        out[i] = voiceBurst[i];
-    voiceBurstReady = false;
+        out[i] = voiceFifo[t][i];
+    vTail = (t + 1) % VOICE_FIFO;
     return true;
+}
+
+unsigned dmr_voiceQueued()
+{
+    return (unsigned)((vHead + VOICE_FIFO - vTail) % VOICE_FIFO);
 }
 
 bool dmr_getCallInfo(dmrCallInfo_t *out)
@@ -338,6 +353,7 @@ void dmr_getDebug(dmrDebug_t *out)
     out->r1f = dbg.r1f;
     out->r21 = dbg.r21;
     out->pins = dbg.pins;
+    out->vDropped = dbg.vDropped;
     out->nVoice = dbg.nVoice;
     out->nData = dbg.nData;
     out->v51 = dbg.v51;

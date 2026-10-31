@@ -153,9 +153,17 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                 const ambe_cs7000_check_t *ck = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
                 if(ck != NULL)
                 {
-                    gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                              color_white, "k%05lX %04X x%u", (unsigned long) ck->end,
-                              (unsigned) ck->sum, (unsigned) ck->badKb);
+                    if(ck->badKb != 0)
+                        gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                                  color_white, "k%05lX %04X x%u", (unsigned long) ck->end,
+                                  (unsigned) ck->sum, (unsigned) ck->badKb);
+                    else
+                        // Codec fine: FEC errors total / last frame, voice
+                        // bursts dropped, silent buffers during a call
+                        gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                                  color_white, "E%u e%u d%lu g%u", dmrAudio_errTotal(),
+                                  dmrAudio_errLast(), (unsigned long) dbg.vDropped,
+                                  dmrAudio_gaps());
                     if(ck->badKb != 0)
                         gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
                                   color_white, "%05lX-%05lX %02X%02X%02X%02X",

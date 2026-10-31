@@ -40,6 +40,9 @@ static volatile bool reqStop = false;
 static pathId outPath;
 static volatile unsigned framesDecoded = 0;
 static volatile uint8_t decState = 0;
+static volatile unsigned errTotal = 0;
+static volatile unsigned errLast = 0;
+static volatile unsigned gaps = 0;
 
 static void *decodeThread(void *arg)
 {
@@ -59,6 +62,7 @@ static void *decodeThread(void *arg)
     // fault in the codec and a fault in the audio stream can be told apart
     // on the radio (a crash with no DMR traffic is not the codec).
     bool codecReady = false;
+    bool playing = false;
 
     uint8_t frames[27];
     uint8_t next = 3; // index of the next frame to decode, 3 = none left
@@ -71,8 +75,17 @@ static void *decodeThread(void *arg)
         if (audioPath_getStatus(outPath) != PATH_OPEN)
             break;
 
-        if (next >= 3 && dmr_popVoiceBurst(frames))
-            next = 0;
+        // Jitter buffer: start (or restart after running dry) only once two
+        // bursts are queued, so that slot timing jitter does not insert
+        // silence between bursts.
+        if (next >= 3) {
+            if (!playing && dmr_voiceQueued() >= 2)
+                playing = true;
+            if (playing && dmr_popVoiceBurst(frames))
+                next = 0;
+            else if (playing)
+                playing = false;
+        }
 
         stream_sample_t *buf = outputStream_getIdleBuffer(oStream);
         if (buf == NULL)
@@ -85,11 +98,16 @@ static void *decodeThread(void *arg)
         }
 
         if (next < 3) {
-            ambe_cs7000_decode(&decoder,
-                               &frames[next * AMBE_CS7000_FRAME_BYTES], buf);
+            int e = ambe_cs7000_decode(
+                &decoder, &frames[next * AMBE_CS7000_FRAME_BYTES], buf);
+            errLast = (unsigned)e;
+            errTotal += (unsigned)e;
             framesDecoded++;
             next += 1;
         } else {
+            dmrCallInfo_t ci;
+            if (dmr_getCallInfo(&ci))
+                gaps++;
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
         }
 
@@ -151,6 +169,21 @@ const void *dmrAudio_blobCheck()
     return ambe_cs7000_check();
 }
 
+unsigned dmrAudio_errTotal()
+{
+    return errTotal;
+}
+
+unsigned dmrAudio_errLast()
+{
+    return errLast;
+}
+
+unsigned dmrAudio_gaps()
+{
+    return gaps;
+}
+
 #else /* !CS7000_AMBE */
 
 uint8_t dmrAudio_state()
@@ -166,6 +199,21 @@ unsigned dmrAudio_frames()
 const void *dmrAudio_blobCheck()
 {
     return NULL;
+}
+
+unsigned dmrAudio_errTotal()
+{
+    return 0;
+}
+
+unsigned dmrAudio_errLast()
+{
+    return 0;
+}
+
+unsigned dmrAudio_gaps()
+{
+    return 0;
 }
 
 bool dmrAudio_start(const pathId path)
