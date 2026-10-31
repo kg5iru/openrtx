@@ -15,7 +15,7 @@ running on the STM32H743.  OpenRTX cannot ship that code.  Instead:
   `HOST_V9.00.96` firmware file, repoints its 80 absolute addresses and writes a
   relocated blob;
 * `ambe_cs7000.c` is a small GPL wrapper (init / encode / decode) that calls
-  into the blob at a fixed flash address (`AMBE_BLOB_BASE`, 0x08180000).
+  into the blob at a fixed flash address (`AMBE_BLOB_BASE`, 0x08138000, right after the OpenRTX image inside the 512 kB slot the vendor updater writes).
 
 The blob and any image containing it are Connect Systems' code.  Keep them for
 your own radio.  Do not publish them, attach them to issues, or commit them.

@@ -72,9 +72,9 @@ bool ambe_cs7000_available(void)
     return *(const volatile uint16_t *)(AMBE_ADDR_ENC_HALF & ~1U) != 0xFFFF;
 }
 
-#define BLOB_BASE (AMBE_ADDR_ENC_HALF & ~0xFFFFU)
-#define BLOB_SIZE 290976U /* ambe_cs7000.bin from HOST V9.00.96 */
-#define REGION_SIZE 0x80000U
+#define BLOB_BASE AMBE_BLOB_BASE
+#define BLOB_SIZE AMBE_BLOB_SIZE
+#define REGION_SIZE (0x08180000U - AMBE_BLOB_BASE) /* to the slot end */
 
 void ambe_cs7000_check(uint32_t *end, uint16_t *sum)
 {

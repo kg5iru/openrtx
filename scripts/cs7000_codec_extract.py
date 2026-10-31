@@ -195,7 +195,7 @@ def build(img, base):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('firmware')
-    ap.add_argument('--base', default='0x08180000', help='flash address of the blob (multiple of 8); must match ambe_cs7000_layout.h')
+    ap.add_argument('--base', default='0x08138000', help='flash address of the blob (multiple of 8); must match ambe_cs7000_layout.h')
     ap.add_argument('--merge', help='OpenRTX flat image (.bin) to append the blob to')
     ap.add_argument('--flash-origin', default='0x08100000', help='flash address the --merge image starts at')
     ap.add_argument('--merged-out', help='output file for --merge')
