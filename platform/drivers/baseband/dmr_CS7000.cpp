@@ -110,6 +110,45 @@ static void endCall();
 
 static uint8_t slotsSinceVoice = 0;
 
+static volatile bool deferredRead = false;
+static uint8_t earlyRead[27];
+
+// Read the voice port into the FIFO.  'late' marks a deferred read, which is
+// compared with the copy taken at the burst event.
+static void pushVoice(bool late)
+{
+    uint8_t nh = (vHead + 1) % VOICE_FIFO;
+    if (nh == vTail) {
+        dbg.vDropped++; // full: drop the oldest
+        vTail = (vTail + 1) % VOICE_FIFO;
+    }
+    vspiReadVoice(voiceFifo[vHead]);
+
+    const uint8_t *ref = late ? earlyRead : nullptr;
+    uint8_t again[27];
+    if (ref == nullptr) {
+        vspiReadVoice(again); // immediate re-read
+        ref = again;
+    }
+    for (int i = 0; i < 27; i++) {
+        if (ref[i] != voiceFifo[vHead][i]) {
+            dbg.vMismatch++;
+            break;
+        }
+    }
+
+    const uint8_t *prev = voiceFifo[(vHead + VOICE_FIFO - 1) % VOICE_FIFO];
+    bool same = true;
+    for (int i = 0; i < 27; i++)
+        if (prev[i] != voiceFifo[vHead][i])
+            same = false;
+    if (same)
+        dbg.vDup++;
+
+    vHead = nh;
+    deferredRead = false;
+}
+
 static void handleSlot()
 {
     // A receive request covers a single slot: the chip receives that slot and
@@ -122,6 +161,9 @@ static void handleSlot()
     // used: run on an idle channel it restarts the receiver about every
     // 0.4 s, and it rewrote the sync enable register (0x5F) to 0x30.
     C6000.writeCfgRegister(0x41, 0x50);
+
+    if (deferredRead)
+        pushVoice(true);
 
     // End a call whose terminator was missed: no voice for 20 slots (600 ms).
     if (callActive && (++slotsSinceVoice >= 20))
@@ -157,7 +199,7 @@ static uint32_t be24(const uint8_t *p)
  * shrugs off a few hundred Hz of error, 4FSK does not.  v25 (0, +-400,
  * +-900) found fewer bad frames the lower the frequency, best at -900 Hz.
  */
-static const int32_t rxOffsets[DMR_VARIANTS] = { 0, -500, -1000, -1500, 500 };
+static const int32_t rxOffsets[DMR_VARIANTS] = { 0, 0, 0, 0, 0 };
 
 static volatile uint8_t variant = 0;
 
@@ -177,7 +219,7 @@ static void endCall()
     vTail = vHead;
     rxState = DmrRxState::LISTENING;
 
-    variant = (variant + 1) % DMR_VARIANTS;
+    variant = (variant + 1) % 2; // 0 = read at the event, 1 = deferred
 }
 
 static void handleSys()
@@ -250,40 +292,22 @@ static void handleSys()
             // Voice bytes come from V_SPI (see vspiReadVoice).  The RX RAM
             // windows (0x30/0x60) are not the codec input in the stock
             // firmware.
-            uint8_t nh = (vHead + 1) % VOICE_FIFO;
-            if (nh == vTail) {
-                dbg.vDropped++; // full: drop the oldest
-                vTail = (vTail + 1) % VOICE_FIFO;
-            }
-            vspiReadVoice(voiceFifo[vHead]);
-            {
-                // Read the voice port a second time: a difference means the
-                // SPI read itself is unreliable
-                uint8_t again[27];
-                vspiReadVoice(again);
-                for (int i = 0; i < 27; i++) {
-                    if (again[i] != voiceFifo[vHead][i]) {
-                        dbg.vMismatch++;
-                        break;
-                    }
-                }
-            }
-            {
-                // Same 27 bytes as the previous burst = stale read
-                const uint8_t *prev =
-                    voiceFifo[(vHead + VOICE_FIFO - 1) % VOICE_FIFO];
-                bool same = true;
-                for (int i = 0; i < 27; i++)
-                    if (prev[i] != voiceFifo[vHead][i])
-                        same = false;
-                if (same)
-                    dbg.vDup++;
-            }
-
             if (rxState != DmrRxState::VOICE_RX)
                 C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
 
-            vHead = nh;
+            // Variant 0: read the voice port now, at the burst event.
+            // Variant 1: read it at the next slot interrupt (the stock
+            // firmware reads it from a task woken later, and reading twice
+            // here gave different data about one burst in six).
+            if (deferredRead)
+                pushVoice(true); // previous burst still pending
+            if (variant == 0)
+                pushVoice(false);
+            else {
+                vspiReadVoice(earlyRead);
+                deferredRead = true;
+            }
+
             slotsSinceVoice = 0;
             rxState = DmrRxState::VOICE_RX;
         }
