@@ -21,6 +21,7 @@
 #include "core/backup.h"
 #include "core/gps.h"
 #include "core/voicePrompts.h"
+#include "core/log.h"
 
 #if defined(PLATFORM_TTWRPLUS)
 #include "pmu.h"
@@ -177,6 +178,28 @@ void *rtx_threadFunc(void *arg)
     return NULL;
 }
 
+#ifdef CONFIG_LOG
+/**
+ * \internal Log thread: formats queued log records and sends them over
+ * rtxlink. Lowest priority, so it only runs when the radio is idle.
+ */
+static void *log_threadFunc(void *arg)
+{
+    (void) arg;
+
+    while(state.devStatus != SHUTDOWN)
+    {
+        log_task();
+        sleepFor(0u, 5u);
+    }
+
+    // Give the last records a chance to leave
+    log_task();
+
+    return NULL;
+}
+#endif
+
 /**
  * \internal This function creates all the system tasks and mutexes.
  */
@@ -219,4 +242,19 @@ void create_threads()
 
     pthread_t ui_thread;
     pthread_create(&ui_thread, &ui_attr, ui_threadFunc, NULL);
+
+    #ifdef CONFIG_LOG
+    pthread_attr_t log_attr;
+    pthread_attr_init(&log_attr);
+    pthread_attr_setstacksize(&log_attr, LOG_THREAD_STKSIZE);
+
+    #ifdef _MIOSIX
+    struct sched_param log_param;
+    log_param.sched_priority = THREAD_PRIO_LOW;
+    pthread_attr_setschedparam(&log_attr, &log_param);
+    #endif
+
+    pthread_t log_thread;
+    pthread_create(&log_thread, &log_attr, log_threadFunc, NULL);
+    #endif
 }
