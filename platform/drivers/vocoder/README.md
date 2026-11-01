@@ -22,11 +22,16 @@ your own radio.  Do not publish them, attach them to issues, or commit them.
 
 ## Build and flash
 
-    meson setup build_cs7000p --cross-file cross_cm7.txt -Dcs7000_ambe=true
+    meson setup build_cs7000p --cross-file cross_cm7.txt -Dcs7000_ambe=true \
+        -Dvoice_prompts=false
     meson compile -C build_cs7000p openrtx_cs7000p_bin     # flat image
     python3 scripts/cs7000_codec_extract.py HOST_V9.00.96.bin --out /tmp/ambe \
         --merge build_cs7000p/openrtx_cs7000p_bin --merged-out /tmp/openrtx_ambe.bin
     python3 scripts/cs7000_wrap.py /tmp/openrtx_ambe.bin openrtx_cs7000p_ambe.bin
+
+`-Dvoice_prompts=false` leaves out the 68 kB of voice prompt audio: the
+OpenRTX slot ends where the blob starts (224 kB), and the image with the USB
+log does not fit otherwise.
 
 Flash the wrapped file as usual.  `ambe_cs7000_available()` returns false when
 the blob is missing, so builds without it still run.

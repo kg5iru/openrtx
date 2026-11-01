@@ -156,6 +156,12 @@ endif
 git_version  = '"'+r.stdout().strip()+'"'
 openrtx_def += {'GIT_VERSION': git_version}
 
+# Without the embedded voice prompt audio vp_init() finds no data and the
+# radio falls back to beeps. Frees about 68 kB of flash.
+if not get_option('voice_prompts')
+  openrtx_def += {'VP_NO_DATA': ''}
+endif
+
 ##
 ## --------------------- Family-dependent source files -------------------------
 ##

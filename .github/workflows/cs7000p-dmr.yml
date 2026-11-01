@@ -1,5 +1,7 @@
 name: "CS7000-PLUS DMR (no codec)"
-# Builds the flat CS7000-PLUS image with the DMR receive mode enabled.  The
+# Builds the flat CS7000-PLUS image with the DMR receive mode enabled and the
+# USB system log (rtxlink_log, on by default).  Voice prompt audio is left out
+# to make room in the 224 kB OpenRTX slot.  The
 # AMBE+2 codec is NOT included (it is Connect Systems' code): merge it in
 # locally with scripts/cs7000_codec_extract.py, see
 # platform/drivers/vocoder/README.md.
@@ -39,7 +41,7 @@ jobs:
           cacheFrom: ghcr.io/kg5iru/openrtx-devcontainer
           push: always
           runCmd: |
-            meson setup --cross-file cross_cm7.txt -Dcs7000_ambe=true build_cm7_dmr &&
+            meson setup --cross-file cross_cm7.txt -Dcs7000_ambe=true -Dvoice_prompts=false build_cm7_dmr &&
             meson compile -C build_cm7_dmr openrtx_cs7000p_bin &&
             chmod -R a+rX build_cm7_dmr
       - name: Upload flat image

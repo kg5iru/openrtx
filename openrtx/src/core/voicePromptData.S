@@ -12,7 +12,9 @@
 .global _vpdata_end
 
 _vpdata_start:
+#ifndef VP_NO_DATA
     .incbin "../voiceprompts.vpc"
+#endif
 
 .set _vpdata_end, .
 #endif
