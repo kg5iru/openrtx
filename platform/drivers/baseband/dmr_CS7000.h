@@ -59,9 +59,10 @@ typedef struct {
     uint8_t lc[9];     ///< RX RAM bytes read at the last valid data burst
     /// voice bursts overwritten before the audio thread took them
     uint32_t vDropped;
-    uint32_t vFlagged; ///< voice bursts with 0x51 bit 2 set (dropped)
-    uint32_t vDup;     ///< voice bursts identical to the previous one
-    uint8_t pins;      ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
+    uint32_t vFlagged;  ///< voice bursts with 0x51 bit 2 set (dropped)
+    uint32_t vMismatch; ///< voice reads that differed when read twice
+    uint32_t vDup;      ///< voice bursts identical to the previous one
+    uint8_t pins;       ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
 } dmrDebug_t;
 
 void dmr_getDebug(dmrDebug_t *out);
@@ -76,8 +77,11 @@ bool dmr_popVoiceBurst(uint8_t out[27]);
 unsigned dmr_voiceQueued();
 
 /** Register set under test (A..D = 0..3), switched at the end of every call. */
-#define DMR_VARIANTS 4
+#define DMR_VARIANTS 5
 uint8_t dmr_variant();
+
+/** RX frequency offset in Hz for test variant v. */
+int32_t dmr_variantOffset(uint8_t v);
 
 #ifdef __cplusplus
 }

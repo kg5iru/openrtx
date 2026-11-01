@@ -61,6 +61,13 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
             audioPath_release(rxAudioPath);
     }
 
+    // Bring-up test: retune when the call-by-call variant changes
+    static uint8_t tunedVariant = 0xFF;
+    if ((status->opStatus == RX) && (dmr_variant() != tunedVariant)) {
+        tunedVariant = dmr_variant();
+        radio_enableRx();
+    }
+
     // Transmit is not implemented: ignore PTT.
 
     dmr_pollDiag();

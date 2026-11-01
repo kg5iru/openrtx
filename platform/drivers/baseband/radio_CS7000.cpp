@@ -298,6 +298,11 @@ void radio_enableRx()
 
     // Set PLL frequency
     uint32_t pllFreq = config->rxFrequency - IF_FREQ;
+#ifdef CONFIG_DMR_CS7000
+    // DMR bring-up test: receive frequency offset (Hz) of the current variant
+    if (config->opMode == OPMODE_DMR)
+        pllFreq = (uint32_t)((int32_t)pllFreq + dmr_variantOffset(dmr_variant()));
+#endif
     SKY73210_setFrequency(&pll, pllFreq, 3);
 
     // Set input filter tune voltage

@@ -149,41 +149,20 @@ static uint32_t be24(const uint8_t *p)
 }
 
 /*
- * A/B test of the demodulator and data link registers, one call at a time.
- * v22 (GD-77 values) and v23 (stock CS7000 values) gave clearly different
- * FEC error rates, so instead of one build per guess the radio cycles
- * through four register sets, switching at the end of every call, and the
- * DMR screen shows bad/total frames for each.  Set A is what dmrMode() writes
- * (stock values).
+ * A/B test, one call at a time.  v24 switched register sets from the
+ * interrupt, and the first switch (with its module reset) left the receiver
+ * deaf, so set A was the only one ever measured: 60 of 90 frames bad.  This
+ * build keeps the registers as dmrMode() sets them and instead steps the
+ * receive frequency, from the OpMode thread, by the offsets below (Hz): FM
+ * shrugs off a few hundred Hz of error, 4FSK does not.
  */
-struct RegVariant {
-    uint8_t r0E, r0F, r21, r26;
-};
-
-static const RegVariant variants[DMR_VARIANTS] = {
-    { 0x8C, 0xBA, 0x02, 0x7D }, // A: stock CS7000 (v23)
-    { 0x8E, 0xB8, 0xA0, 0xFE }, // B: GD-77 values, FM's 0x26 (v22)
-    { 0x8E, 0xB8, 0xA0, 0x7D }, // C: GD-77 values, stock 0x26
-    { 0x8C, 0xBA, 0x02, 0xFE }, // D: stock values, FM's 0x26
-};
+static const int32_t rxOffsets[DMR_VARIANTS] = { 0, 400, -400, 900, -900 };
 
 static volatile uint8_t variant = 0;
 
-static void applyVariant(uint8_t v)
+int32_t dmr_variantOffset(uint8_t v)
 {
-    const RegVariant &r = variants[v];
-    C6000.writeCfgRegister(0x0E, r.r0E);
-    C6000.writeCfgRegister(0x0F, r.r0F);
-    C6000.writeCfgRegister(0x21, r.r21);
-    C6000.writeCfgRegister(0x26, r.r26);
-    C6000.writeCfgRegister(0x00, 0x3F); // restart the DMR modules
-    C6000.writeCfgRegister(0x40,
-                           0x03); // and passive reception, as in dmrMode()
-    C6000.writeCfgRegister(0x41, 0x20);
-    C6000.writeCfgRegister(0x41, 0x00);
-    C6000.writeCfgRegister(0x41, 0x40);
-    C6000.writeCfgRegister(0x40, 0x43);
-    C6000.writeCfgRegister(0x1F, 0x10); // colour code 1
+    return rxOffsets[v % DMR_VARIANTS];
 }
 
 uint8_t dmr_variant()
@@ -198,7 +177,6 @@ static void endCall()
     rxState = DmrRxState::LISTENING;
 
     variant = (variant + 1) % DMR_VARIANTS;
-    applyVariant(variant);
 }
 
 static void handleSys()
@@ -277,6 +255,18 @@ static void handleSys()
                 vTail = (vTail + 1) % VOICE_FIFO;
             }
             vspiReadVoice(voiceFifo[vHead]);
+            {
+                // Read the voice port a second time: a difference means the
+                // SPI read itself is unreliable
+                uint8_t again[27];
+                vspiReadVoice(again);
+                for (int i = 0; i < 27; i++) {
+                    if (again[i] != voiceFifo[vHead][i]) {
+                        dbg.vMismatch++;
+                        break;
+                    }
+                }
+            }
             {
                 // Same 27 bytes as the previous burst = stale read
                 const uint8_t *prev =
@@ -463,6 +453,7 @@ void dmr_getDebug(dmrDebug_t *out)
     out->vDropped = dbg.vDropped;
     out->vFlagged = dbg.vFlagged;
     out->vDup = dbg.vDup;
+    out->vMismatch = dbg.vMismatch;
     out->nVoice = dbg.nVoice;
     out->nData = dbg.nData;
     out->v51 = dbg.v51;
