@@ -154,9 +154,10 @@ static uint32_t be24(const uint8_t *p)
  * deaf, so set A was the only one ever measured: 60 of 90 frames bad.  This
  * build keeps the registers as dmrMode() sets them and instead steps the
  * receive frequency, from the OpMode thread, by the offsets below (Hz): FM
- * shrugs off a few hundred Hz of error, 4FSK does not.
+ * shrugs off a few hundred Hz of error, 4FSK does not.  v25 (0, +-400,
+ * +-900) found fewer bad frames the lower the frequency, best at -900 Hz.
  */
-static const int32_t rxOffsets[DMR_VARIANTS] = { 0, 400, -400, 900, -900 };
+static const int32_t rxOffsets[DMR_VARIANTS] = { 0, -500, -1000, -1500, 500 };
 
 static volatile uint8_t variant = 0;
 

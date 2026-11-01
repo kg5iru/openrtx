@@ -27,6 +27,7 @@ struct CS7000Calib
     uint8_t  txAnalogPathI[8];   // 0x0CC
     uint8_t  txAnalogPathQ[8];   // 0x0D4
     uint8_t  errorRate[8];       // 0x0DC
+    uint8_t  vcxoBias;           // 0x174, two-point bias used by the stock DMR channel load
 };
 
 /**

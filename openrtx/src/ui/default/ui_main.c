@@ -18,6 +18,7 @@
 #include "dmr_CS7000.h"
 #include "dmr_audio_CS7000.h"
 #include "ambe_cs7000.h"
+extern uint16_t radio_dmrCalPair(void);
 #endif
 
 void _ui_drawMainBackground()
@@ -143,8 +144,8 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             else
             {
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "a%u f%u g%u", (unsigned) dmrAudio_state(),
-                          dmrAudio_frames(), dmrAudio_gaps());
+                          color_white, "f%u g%u t%04X", dmrAudio_frames(),
+                          dmrAudio_gaps(), (unsigned) radio_dmrCalPair());
             }
 
             // Codec region check: end offset, sum, bad 1 kB blocks, first

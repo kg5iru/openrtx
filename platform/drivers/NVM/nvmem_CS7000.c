@@ -124,6 +124,7 @@ void nvm_readCalibData(void *buf)
     nvm_read(0, 1, 0x10C4, &(calData->txDigitalPathQ), sizeof(calData->txDigitalPathQ));
     nvm_read(0, 1, 0x10CC, &(calData->txAnalogPathI),  sizeof(calData->txAnalogPathI));
     nvm_read(0, 1, 0x10DC, &(calData->errorRate),      sizeof(calData->errorRate));
+    nvm_read(0, 1, 0x1174, &(calData->vcxoBias),       sizeof(calData->vcxoBias));
 
     for(int i = 0; i < 8; i++)
     {

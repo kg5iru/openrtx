@@ -123,6 +123,19 @@ void HR_Cx000< M >::terminate()
 }
 
 template< class M >
+void HR_Cx000< M >::setTwoPointBias(const uint8_t offset)
+{
+    uint16_t bias = (0xFF - offset) & 0xFF;
+    if(bias < 0x80)
+        bias = 0x7F - bias;
+    else
+        bias = 0x47F - bias;
+
+    writeReg(M::CONFIG, 0x47, bias & 0xFF);         // Two-point bias, lower value
+    writeReg(M::CONFIG, 0x48, (bias >> 8) & 0x03);  // Two-point bias, upper value
+}
+
+template< class M >
 void HR_Cx000< M >::setModOffset(const uint16_t offset)
 {
     /*

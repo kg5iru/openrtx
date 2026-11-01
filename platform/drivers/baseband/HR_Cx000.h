@@ -87,6 +87,14 @@ public:
     void setModOffset(const uint16_t offset);
 
     /**
+     * Set only the two-point bias (regs 0x47/0x48) from a calibration byte,
+     * same conversion as setModOffset() (stock fn 0x080537AC).
+     *
+     * @param offset: calibration value.
+     */
+    void setTwoPointBias(const uint8_t offset);
+
+    /**
      * Set values for two-point modulation amplitude adjustment. These values
      * usually are stored in radio calibration data.
      *

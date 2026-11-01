@@ -198,6 +198,14 @@ void radio_init(const rtxStatus_t *rtxState)
     C6000.setModOffset(calData.errorRate[0]);
 }
 
+#ifdef CONFIG_DMR_CS7000
+// Diagnostics: errorRate[0] (OpenRTX's boot-time bias) and the stock DMR bias
+extern "C" uint16_t radio_dmrCalPair()
+{
+    return (uint16_t)((calData.errorRate[0] << 8) | calData.vcxoBias);
+}
+#endif
+
 void radio_terminate()
 {
     gpioDev_clear(TX_PWR_EN);       // Disable TX power stage
@@ -447,6 +455,16 @@ void radio_updateConfiguration()
     }
     C6000.writeCfgRegister(0x45, qAmp);   // Adjustment of Mod2 amplitude
     C6000.writeCfgRegister(0x46, iAmp);   // Adjustment of Mod1 amplitude
+
+    // Two-point bias (VCXO trim): the stock firmware's channel load takes it
+    // from calibration byte 0x1174 (fn 0x080537AC, called from 0x0804BEE6),
+    // while OpenRTX used errorRate[0] (0x10DC) at boot for every mode.  4FSK
+    // is far less tolerant of a reference error than FM, so on a DMR
+    // channel use the stock value.
+    if(config->opMode == OPMODE_DMR)
+        C6000.setTwoPointBias(calData.vcxoBias);
+    else
+        C6000.setModOffset(calData.errorRate[0]);
 
     // RSSI interpolation curve
     rssi = interpRssi(config->rxFrequency, rssiCal);
