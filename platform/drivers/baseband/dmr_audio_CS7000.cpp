@@ -24,6 +24,7 @@
 #include "core/threads.h"
 #include "drivers/baseband/dmr_CS7000.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
+#include "core/log.h"
 
 #ifdef CS7000_AMBE
 
@@ -58,9 +59,12 @@ static void *decodeThread(void *arg)
     streamId oStream = audioStream_start(outPath, audioBuf, DMA_BUF_SAMPLES,
                                          8000, STREAM_OUTPUT | BUF_CIRC_DOUBLE);
     if (oStream < 0) {
+        LOG_E("ambe", "output stream start failed (%d)", oStream);
         running = false;
         return NULL;
     }
+
+    LOG_I("ambe", "decode thread started");
 
     // The codec is initialised on the first voice burst, not here, so that a
     // fault in the codec and a fault in the audio stream can be told apart
@@ -83,12 +87,17 @@ static void *decodeThread(void *arg)
         // bursts are queued, so that slot timing jitter does not insert
         // silence between bursts.
         if (next >= 3) {
-            if (!playing && dmr_voiceQueued() >= 2)
+            if (!playing && dmr_voiceQueued() >= 2) {
                 playing = true;
+                LOG_D("ambe", "playout start, %u bursts queued",
+                      dmr_voiceQueued());
+            }
             if (playing && dmr_popVoiceBurst(frames))
                 next = 0;
-            else if (playing)
+            else if (playing) {
                 playing = false;
+                LOG_D("ambe", "playout stop, buffer empty");
+            }
         }
 
         stream_sample_t *buf = outputStream_getIdleBuffer(oStream);
@@ -115,12 +124,16 @@ static void *decodeThread(void *arg)
                 if (e >= 4)
                     vBad[v]++;
             }
+            LOG_D("ambe", "frame %u.%u errors %d variant %u", framesDecoded,
+                  next, e, dmr_variant() % DMR_VARIANTS);
             framesDecoded++;
             next += 1;
         } else {
             dmrCallInfo_t ci;
-            if (dmr_getCallInfo(&ci))
+            if (dmr_getCallInfo(&ci)) {
                 gaps++;
+                LOG_D("ambe", "gap: call active but no burst queued");
+            }
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
         }
 
@@ -128,6 +141,10 @@ static void *decodeThread(void *arg)
     }
 
     audioStream_stop(oStream);
+    LOG_I("ambe",
+          "decode thread stopped: %u frames, %u errors, %u bad, "
+          "%u gaps",
+          framesDecoded, errTotal, badFrames, gaps);
     decState = 0;
     running = false;
     return NULL;

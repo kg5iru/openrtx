@@ -44,6 +44,7 @@
 #include "hwconfig.h"
 #include "drivers/baseband/HR_C6000.h"
 #include "drivers/baseband/dmr_CS7000.h"
+#include "core/log.h"
 #include "peripherals/spi.h"
 #include "drivers/SPI/spi_stm32.h"
 
@@ -120,6 +121,7 @@ static void pushVoice(bool late)
     uint8_t nh = (vHead + 1) % VOICE_FIFO;
     if (nh == vTail) {
         dbg.vDropped++; // full: drop the oldest
+        LOG_W("dmr", "voice FIFO full, oldest burst dropped");
         vTail = (vTail + 1) % VOICE_FIFO;
     }
     vspiReadVoice(voiceFifo[vHead]);
@@ -133,6 +135,8 @@ static void pushVoice(bool late)
     for (int i = 0; i < 27; i++) {
         if (ref[i] != voiceFifo[vHead][i]) {
             dbg.vMismatch++;
+            LOG_D("dmr", "voice reread differs at byte %d (%s)", i,
+                  late ? "deferred" : "immediate");
             break;
         }
     }
@@ -142,8 +146,13 @@ static void pushVoice(bool late)
     for (int i = 0; i < 27; i++)
         if (prev[i] != voiceFifo[vHead][i])
             same = false;
-    if (same)
+    if (same) {
         dbg.vDup++;
+        LOG_D("dmr", "voice burst identical to the previous one");
+    }
+
+    LOG_HEX(LOG_LVL_DEBUG, "dmr", late ? "voice(late)" : "voice",
+            voiceFifo[vHead], 27);
 
     vHead = nh;
     deferredRead = false;
@@ -166,8 +175,10 @@ static void handleSlot()
         pushVoice(true);
 
     // End a call whose terminator was missed: no voice for 20 slots (600 ms).
-    if (callActive && (++slotsSinceVoice >= 20))
+    if (callActive && (++slotsSinceVoice >= 20)) {
+        LOG_I("dmr", "call end: no voice for 20 slots");
         endCall();
+    }
 }
 
 // DMR_SYS_INT / SYS_INTER (GPIOC,3 -> EXTI3): "something happened, go read
@@ -232,6 +243,8 @@ static void handleSys()
     uint8_t sync = C6000.readCfgRegister(0x5F);
 
     uint8_t rxCc = (reg52 >> 4) & 0x0F;
+    LOG_D("dmr", "sys 82=%02x 51=%02x 52=%02x 5f=%02x", flags, reg51, reg52,
+          sync);
     dbg.flagsLast = flags;
     dbg.flagsOr |= flags;
     dbg.sync = sync;
@@ -242,8 +255,10 @@ static void handleSys()
     // (they are about half of all voice-class events): the codec's FEC errors
     // per frame doubled, so those are not good voice and are dropped again.
     bool valid = ((reg51 & 0x04) == 0) && (cls == 1 || cls == 2);
-    if ((cls == 1) && (reg51 & 0x04))
+    if ((cls == 1) && (reg51 & 0x04)) {
         dbg.vFlagged++;
+        LOG_D("dmr", "voice burst flagged invalid, dropped");
+    }
     if (valid)
         dbg.bursts++;
 
@@ -263,6 +278,7 @@ static void handleSys()
             dbg.lastType = type;
             for (int i = 0; i < 9; i++)
                 dbg.lc[i] = lc[i];
+            LOG_HEX(LOG_LVL_DEBUG, "dmr", "data lc", lc, sizeof(lc));
             if (type == 1) // voice LC header
             {
                 callInfo.flco = lc[0] & 0x3F;
@@ -273,8 +289,11 @@ static void handleSys()
                 slotsSinceVoice = 0;
                 dbg.headers++;
                 rxState = DmrRxState::VOICE_HEADER_OK;
+                LOG_I("dmr", "call start: flco %u src %lu dst %lu",
+                      callInfo.flco, callInfo.src, callInfo.dst);
             } else if (type == 2) // terminator with LC
             {
+                LOG_I("dmr", "call end: terminator");
                 endCall();
             }
         } else {
@@ -286,6 +305,7 @@ static void handleSys()
         if (cls == 1 && !callActive) {
             callActive = true;
             slotsSinceVoice = 0;
+            LOG_I("dmr", "call start: late entry, no header seen");
         }
         if (cls == 1 && callActive) // voice burst
         {
