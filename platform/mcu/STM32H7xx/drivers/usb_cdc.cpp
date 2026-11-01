@@ -714,6 +714,12 @@ static int usbcdc_init(const struct chardev *dev)
     gpio_setMode(GPIOA, 11, ALTERNATE | ALTERNATE_FUNC(10));
     gpio_setMode(GPIOA, 12, ALTERNATE | ALTERNATE_FUNC(10));
 
+    // Keep the core clocked in sleep (the idle thread runs WFI), but not
+    // the ULPI clock: there is no external PHY, and with it left enabled
+    // the core stops answering the host while the CPU sleeps.
+    RCC->AHB1LPENR = (RCC->AHB1LPENR & ~RCC_AHB1LPENR_USB2OTGFSULPILPEN)
+                   | RCC_AHB1LPENR_USB2OTGFSLPEN;
+
     // Reset the peripheral: the boot loader may have used it
     RCC->AHB1ENR |= RCC_AHB1ENR_USB2OTGFSEN;
     RCC->AHB1RSTR |= RCC_AHB1RSTR_USB2OTGFSRST;
