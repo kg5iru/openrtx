@@ -16,6 +16,10 @@
 #include "hwconfig.h"
 #include <string.h>
 #include "core/gps.h"
+#include "core/log.h"
+#ifdef CONFIG_LOG
+#include "usb_cdc.h"
+#endif
 
 static const hwInfo_t hwInfo =
 {
@@ -30,8 +34,44 @@ static const hwInfo_t hwInfo =
 };
 
 
+#ifdef CONFIG_LOG
+/*
+ * The log works from the first line of platform_init(): records wait in RAM
+ * until the USB port is up and a host opens it. The port itself is started
+ * last, after the power latch, because bringing it up takes about 35 ms.
+ */
+static uint32_t resetFlags;
+
+static void startLog()
+{
+    uint32_t rsr = resetFlags;
+    int ret = log_init(&usb_cdc_chardev);
+
+    LOG_I("boot", "OpenRTX %s on %s", GIT_VERSION, hwInfo.name);
+    LOG_I("boot", "reset flags 0x%08lx:%s%s%s%s%s%s%s", rsr,
+          (rsr & RCC_RSR_PORRSTF)   ? " power-on" : "",
+          (rsr & RCC_RSR_PINRSTF)   ? " pin"      : "",
+          (rsr & RCC_RSR_BORRSTF)   ? " brown-out": "",
+          (rsr & RCC_RSR_SFTRSTF)   ? " software" : "",
+          (rsr & RCC_RSR_IWDG1RSTF) ? " iwdg"     : "",
+          (rsr & RCC_RSR_WWDG1RSTF) ? " wwdg"     : "",
+          (rsr & RCC_RSR_LPWRRSTF)  ? " low-power": "");
+
+    if(ret < 0)
+        LOG_E("boot", "USB port init failed (%d), log stays in RAM", ret);
+}
+#endif
+
 void platform_init()
 {
+    #ifdef CONFIG_LOG
+    // Reset cause, read before anything else; the vendor boot loader runs
+    // before us and may have cleared some flags already.
+    resetFlags = RCC->RSR;
+    RCC->RSR  |= RCC_RSR_RMVF;
+    log_portInit();     // timestamps from here on
+    #endif
+
     gpio_setMode(PTT_SW,       INPUT);
     gpio_setMode(PTT_EXT,      INPUT);
 
@@ -51,6 +91,10 @@ void platform_init()
 
     #ifndef RUNNING_TESTSUITE
     gpioDev_set(MAIN_PWR_SW);
+    #endif
+
+    #ifdef CONFIG_LOG
+    startLog();
     #endif
 }
 

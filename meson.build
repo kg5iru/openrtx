@@ -598,6 +598,17 @@ if get_option('cs7000_ambe')
   cs7000p_def += {'CS7000_AMBE': '', 'CONFIG_DMR_CS7000': ''}
 endif
 
+# System log over USB: USB CDC-ACM driver, rtxlink framing and the log core.
+# About 5 kB of flash and 12 kB of RAM (log thread stack included); see
+# openrtx/include/core/log.h
+if get_option('rtxlink_log')
+  cs7000p_src += ['platform/mcu/STM32H7xx/drivers/usb_cdc.cpp',
+                  'platform/mcu/STM32H7xx/drivers/log_port.c',
+                  'openrtx/src/core/rtxlink.c',
+                  'openrtx/src/core/log.c']
+  cs7000p_def += {'CONFIG_LOG': ''}
+endif
+
 cs7000p_src += openrtx_src + stm32h743_src + miosix_cm7_src + ui_src_default
 cs7000p_inc += openrtx_inc + stm32h743_inc + miosix_cm7_inc
 cs7000p_def += openrtx_def + stm32h743_def + miosix_cm7_def

@@ -2,3 +2,4 @@ option('asan', type : 'boolean', value : false, description : 'Compile the softw
 option('ubsan', type : 'boolean', value : false, description : 'Compile the software with Undefined Behaviour Sanitizer')
 option('test', type: 'string', description: 'Replace the main OpenRTX source file with a specialized test')
 option('cs7000_ambe', type : 'boolean', value : false, description : 'CS7000-PLUS: build the glue for the AMBE+2 codec extracted from the user\'s own Connect Systems firmware')
+option('rtxlink_log', type : 'boolean', value : true, description : 'CS7000-PLUS: system log over USB (rtxlink LOG frames), read it with scripts/rtxlink_log.py')
