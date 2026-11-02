@@ -51,6 +51,10 @@ typedef struct
     bool    showBatteryIcon;      // Battery display true: icon, false: percentage
     bool    gpsSetTime;           // Use GPS to ajust RTC time
     char    M17_meta_text[53];    // M17 Meta Text to send
+#ifdef CONFIG_DMR_CS7000
+    uint8_t dmr_cc;               // DMR colour code + 1, 0 = not set (1)
+    uint32_t dmr_rxTg;            // DMR talkgroup to receive, 0 = all
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -79,6 +83,27 @@ static const settings_t default_settings =
     false,                        // Display battery icon
     false,                        // Update RTC with GPS
     "OpenRTX",                    // Default M17 meta text
+#ifdef CONFIG_DMR_CS7000
+    0,                            // DMR colour code not set (1)
+    0,                            // Receive all DMR talkgroups
+#endif
 };
+
+#ifdef CONFIG_DMR_CS7000
+/*
+ * The DMR fields were added at the end of settings_t: settings saved by an
+ * older build read back with them zeroed, so the colour code is stored plus
+ * one and zero means the usual default of 1.
+ */
+static inline uint8_t settings_dmrColourCode(const settings_t *s)
+{
+    return (s->dmr_cc == 0) ? 1 : ((s->dmr_cc - 1) & 0x0F);
+}
+
+static inline void settings_setDmrColourCode(settings_t *s, uint8_t cc)
+{
+    s->dmr_cc = (cc & 0x0F) + 1;
+}
+#endif
 
 #endif /* SETTINGS_H */

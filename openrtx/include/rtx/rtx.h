@@ -53,6 +53,10 @@ typedef struct
     char     M17_link[10];             /**  M17 LSF traffic originator */
     char     M17_refl[10];             /**  M17 LSF reflector module   */
     char     M17_meta_text[53];        /**< M17 Meta Text              */
+#ifdef CONFIG_DMR_CS7000
+    uint8_t  dmrColourCode;            /**< DMR colour code            */
+    uint32_t dmrRxTalkgroup;           /**< DMR RX talkgroup, 0 = all  */
+#endif
 }
 rtxStatus_t;
 

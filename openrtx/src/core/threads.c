@@ -91,6 +91,11 @@ void *ui_threadFunc(void *arg)
             strncpy(rtx_cfg.source_address,      state.settings.callsign, 10);
             strncpy(rtx_cfg.destination_address, state.settings.m17_dest, 10);
 
+            #ifdef CONFIG_DMR_CS7000
+            rtx_cfg.dmrColourCode  = settings_dmrColourCode(&state.settings);
+            rtx_cfg.dmrRxTalkgroup = state.settings.dmr_rxTg;
+            #endif
+
             pthread_mutex_unlock(&rtx_mutex);
 
             rtx_configure(&rtx_cfg);
