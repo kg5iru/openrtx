@@ -1,10 +1,10 @@
-name: "CS7000-PLUS DMR (no codec)"
-# Builds the flat CS7000-PLUS image with the DMR receive mode enabled and the
-# USB system log (rtxlink_log, on by default).  Voice prompt audio is left out
-# to make room in the 224 kB OpenRTX slot.  The
-# AMBE+2 codec is NOT included (it is Connect Systems' code): merge it in
-# locally with scripts/cs7000_codec_extract.py, see
-# platform/drivers/vocoder/README.md.
+name: "CS7000-PLUS DMR"
+# Builds the CS7000-PLUS image with the DMR receive mode, the USB system log
+# (rtxlink_log, on by default) and the voice prompts.  The AMBE+2 codec is NOT
+# in the image: it is called in place in the stock HOST V9.00.96 firmware the
+# radio keeps flashed (-Dcs7000_ambe_stock=true), so the image holds no
+# Connect Systems code and is uploaded both flat and wrapped for the vendor
+# Factory Tool.  See platform/drivers/vocoder/README.md.
 on:
   workflow_dispatch:
   push:
@@ -41,12 +41,19 @@ jobs:
           cacheFrom: ghcr.io/kg5iru/openrtx-devcontainer
           push: always
           runCmd: |
-            meson setup --cross-file cross_cm7.txt -Dcs7000_ambe=true -Dvoice_prompts=false build_cm7_dmr &&
+            meson setup --cross-file cross_cm7.txt -Dcs7000_ambe=true -Dcs7000_ambe_stock=true build_cm7_dmr &&
             meson compile -C build_cm7_dmr openrtx_cs7000p_bin &&
+            python3 scripts/cs7000_wrap.py build_cm7_dmr/openrtx_cs7000p_bin build_cm7_dmr/openrtx_cs7000p_dmr_wrapped.bin &&
             chmod -R a+rX build_cm7_dmr
       - name: Upload flat image
         uses: actions/upload-artifact@v4
         with:
           name: openrtx_cs7000p_dmr_flat
           path: build_cm7_dmr/openrtx_cs7000p_bin
+          if-no-files-found: error
+      - name: Upload wrapped image (flash with the Factory Tool)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx_cs7000p_dmr_wrapped
+          path: build_cm7_dmr/openrtx_cs7000p_dmr_wrapped.bin
           if-no-files-found: error
