@@ -5,8 +5,14 @@
  */
 
 #include "ambe_cs7000.h"
+#ifdef CS7000_AMBE_STOCK
+/* Codec called in place, inside the stock image kept flashed on the radio */
+#include "ambe_cs7000_stock.h"
+#else
+/* Codec copied into the OpenRTX slot by scripts/cs7000_codec_extract.py */
 #include "ambe_cs7000_layout.h"
 #include "ambe_cs7000_ksums.h"
+#endif
 #include <string.h>
 
 /* Field offsets inside the codec state block, from the stock init routine
@@ -73,45 +79,79 @@ bool ambe_cs7000_available(void)
     return *(const volatile uint16_t *)(AMBE_ADDR_ENC_HALF & ~1U) != 0xFFFF;
 }
 
-#define BLOB_BASE AMBE_BLOB_BASE
-#define BLOB_SIZE AMBE_BLOB_SIZE
-#define REGION_SIZE (0x08180000U - AMBE_BLOB_BASE) /* to the slot end */
+/* Regions of flash holding the codec, with their expected per-kB sums. */
+typedef struct {
+    uint32_t base;
+    uint32_t size;
+    const unsigned short *ksums;
+} ambe_region_t;
 
+#ifdef CS7000_AMBE_STOCK
+static const ambe_region_t regions[] = {
+    { AMBE_STOCK_0_BASE, AMBE_STOCK_0_SIZE, ambe_stock_ksums_0 },
+    { AMBE_STOCK_1_BASE, AMBE_STOCK_1_SIZE, ambe_stock_ksums_1 },
+};
+#else
+static const ambe_region_t regions[] = {
+    { AMBE_BLOB_BASE, AMBE_BLOB_SIZE, ambe_blob_ksums },
+};
+#endif
+#define N_REGIONS (sizeof(regions) / sizeof(regions[0]))
+
+/*
+ * Offsets in the result (end, firstBad, lastBad) run across the regions as if
+ * they were laid end to end.  'end' is the last non-0xFF byte up to the slot
+ * end for the copied blob, and the total size checked for the stock image.
+ */
 const ambe_cs7000_check_t *ambe_cs7000_check(void)
 {
     static bool done = false;
     static ambe_cs7000_check_t r;
 
     if (!done) {
-        const volatile uint8_t *p = (const volatile uint8_t *)BLOB_BASE;
         r.end = 0;
         r.sum = 0;
         r.badKb = 0;
         r.firstBad = 0xFFFFFFFFU;
         r.lastBad = 0;
-        for (uint32_t i = 0; i < REGION_SIZE; i++) {
-            if (p[i] != 0xFF)
-                r.end = i + 1;
-        }
-        for (uint32_t k = 0; k < AMBE_BLOB_KSUMS_N; k++) {
-            uint32_t from = k * 1024U;
-            uint32_t to = from + 1024U;
-            if (to > BLOB_SIZE)
-                to = BLOB_SIZE;
-            uint16_t ks = 0;
-            for (uint32_t i = from; i < to; i++)
-                ks += p[i];
-            r.sum += ks;
-            if (ks != ambe_blob_ksums[k]) {
-                r.badKb++;
-                if (r.firstBad == 0xFFFFFFFFU) {
-                    r.firstBad = from;
-                    for (int j = 0; j < 4; j++)
-                        r.bytes[j] = p[from + j];
-                }
-                r.lastBad = from;
+#ifndef CS7000_AMBE_STOCK
+        {
+            const volatile uint8_t *p =
+                (const volatile uint8_t *)AMBE_BLOB_BASE;
+            for (uint32_t i = 0; i < (0x08180000U - AMBE_BLOB_BASE); i++) {
+                if (p[i] != 0xFF)
+                    r.end = i + 1;
             }
         }
+#endif
+        uint32_t offset = 0;
+        for (unsigned g = 0; g < N_REGIONS; g++) {
+            const volatile uint8_t *p =
+                (const volatile uint8_t *)regions[g].base;
+            uint32_t size = regions[g].size;
+            for (uint32_t from = 0; from < size; from += 1024U) {
+                uint32_t to = from + 1024U;
+                if (to > size)
+                    to = size;
+                uint16_t ks = 0;
+                for (uint32_t i = from; i < to; i++)
+                    ks += p[i];
+                r.sum += ks;
+                if (ks != regions[g].ksums[from / 1024U]) {
+                    r.badKb++;
+                    if (r.firstBad == 0xFFFFFFFFU) {
+                        r.firstBad = offset + from;
+                        for (int j = 0; j < 4; j++)
+                            r.bytes[j] = p[from + j];
+                    }
+                    r.lastBad = offset + from;
+                }
+            }
+            offset += size;
+        }
+#ifdef CS7000_AMBE_STOCK
+        r.end = offset;
+#endif
         done = true;
     }
 

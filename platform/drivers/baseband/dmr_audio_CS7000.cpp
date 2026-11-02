@@ -160,9 +160,24 @@ void dmrAudio_stop()
 
 uint8_t dmrAudio_codecStatus()
 {
+    static bool logged = false;
+
     if (!ambe_cs7000_available())
         return DMR_CODEC_MISSING;
-    if (ambe_cs7000_check()->badKb != 0)
+
+    const ambe_cs7000_check_t *ck = ambe_cs7000_check();
+    if (!logged) {
+        logged = true;
+#ifdef CS7000_AMBE_STOCK
+        const char *where = "in the stock image";
+#else
+        const char *where = "copied into the OpenRTX slot";
+#endif
+        LOG_I("ambe", "codec %s: %lu bytes, sum %04x, %u bad kB, first %lx",
+              where, (unsigned long)ck->end, ck->sum, ck->badKb,
+              (unsigned long)ck->firstBad);
+    }
+    if (ck->badKb != 0)
         return DMR_CODEC_DAMAGED;
     return DMR_CODEC_OK;
 }
