@@ -230,7 +230,7 @@ static void endCall()
     vTail = vHead;
     rxState = DmrRxState::LISTENING;
 
-    variant = (variant + 1) % 2; // 0 = read at the event, 1 = deferred
+    // v27: reading at the next slot was no better; always read at the event
 }
 
 static void handleSys()
