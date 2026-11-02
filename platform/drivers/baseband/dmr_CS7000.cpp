@@ -322,11 +322,8 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
     bool term = rs129Match(lc, par, 0x99);
     bool plain = rs129Match(lc, par, 0x00);
 
-    LOG_D("dmr",
-          "lc %02x %02x %02x %02x %02x %02x %02x %02x %02x | %02x %02x %02x"
-          " rs %s 82=%02x 51=%02x",
-          lc[0], lc[1], lc[2], lc[3], lc[4], lc[5], lc[6], lc[7], lc[8], lc[9],
-          lc[10], lc[11],
+    LOG_HEX(LOG_LVL_DEBUG, "dmr", "lc", lc, sizeof(lc));
+    LOG_D("dmr", "lc rs %s 82=%02x 51=%02x",
           header ? "header" : (term ? "term" : (plain ? "plain" : "bad")), r82,
           r51);
 
