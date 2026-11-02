@@ -192,6 +192,31 @@ static void endCall(const char *why)
  * something else, so the same bytes are read several times and only the first
  * read is kept.
  */
+/*
+ * Timeslot capture (v33): for the first three voice bursts of each call, dump
+ * the status registers 0x50..0x5F and 0x90, and the first 9 bytes of the two
+ * RX RAM burst windows (0x30 and 0x60, which the stock firmware picks per
+ * slot), to find a value that follows the timeslot.  The slot counter parity
+ * cannot: the hotspot drops its carrier between calls and the chip re-locks
+ * on an arbitrary slot.
+ */
+static void dumpSlotState(uint32_t n)
+{
+    uint8_t regs[17];
+    for (int i = 0; i < 16; i++)
+        regs[i] = C6000.readCfgRegister(0x50 + i);
+    regs[16] = C6000.readCfgRegister(0x90);
+    uint8_t w30[9], w60[9];
+    C6000.readRxBurst(0x30, w30, sizeof(w30));
+    C6000.readRxBurst(0x60, w60, sizeof(w60));
+
+    LOG_D("dmr", "voice %lu: slot %lu, at event 52=%02x 57=%02x",
+          (unsigned long)n, (unsigned long)slotCount, last52, last57);
+    LOG_HEX(LOG_LVL_DEBUG, "dmr", "regs 50-5f,90", regs, sizeof(regs));
+    LOG_HEX(LOG_LVL_DEBUG, "dmr", "ram 30", w30, sizeof(w30));
+    LOG_HEX(LOG_LVL_DEBUG, "dmr", "ram 60", w60, sizeof(w60));
+}
+
 static void pollVoicePort()
 {
     uint8_t buf[27];
@@ -224,10 +249,8 @@ static void pollVoicePort()
               callMuted ? ", muted (talkgroup unknown)" : "");
     }
 
-    if (callBursts == 0)
-        LOG_D("dmr", "first voice: slot %lu (parity %lu) 52=%02x 57=%02x",
-              (unsigned long)slotCount, (unsigned long)(slotCount & 1), last52,
-              last57);
+    if (callBursts < 3)
+        dumpSlotState(callBursts);
 
     slotsSinceVoice = 0;
     termSeen = false;
