@@ -158,8 +158,15 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                               color_white, "no voice codec");
                     break;
                 case DMR_CODEC_DAMAGED:
+                    #ifdef CS7000_AMBE_STOCK
+                    // The codec is used where it is in the stock image, which
+                    // must be HOST V9.00.96
+                    gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                              color_white, "need stock V9.00.96");
+                    #else
                     gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
                               color_white, "voice codec damaged");
+                    #endif
                     break;
                 default:
                     break;
