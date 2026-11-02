@@ -148,6 +148,7 @@ static uint8_t voiceFifo[VOICE_FIFO][27];
 static volatile uint8_t vHead = 0; // written by the interrupts
 static volatile uint8_t vTail = 0; // written by the audio thread
 
+static bool termSeen = false;      // terminator read since the last voice burst
 static uint8_t lastVoice[27];
 static bool haveLast = false;
 static bool voicePathOn = false;
@@ -163,6 +164,7 @@ static void endCall(const char *why)
     // waiting to be played.
     callActive = false;
     voicePathOn = false;
+    termSeen = false;
 }
 
 /*
@@ -215,6 +217,7 @@ static void pollVoicePort()
         voicePathOn = true;
     }
     slotsSinceVoice = 0;
+    termSeen = false;
 }
 
 // DMR_TS_INT / TIME_SLOT_INTER (PC0 -> EXTI0): every slot (30 ms).
@@ -229,7 +232,7 @@ static void handleSlot()
 
     // End a call whose terminator was missed: no voice for 20 slots (600 ms).
     if (callActive && (++slotsSinceVoice >= 20))
-        endCall("no voice");
+        endCall(termSeen ? "terminator" : "no voice");
 }
 
 static uint32_t be24(const uint8_t *p)
@@ -294,9 +297,9 @@ static bool rs129Match(const uint8_t *lc, const uint8_t par[3], uint8_t mask)
  * only when 0x51 said "voice LC header", and 0x51 is as unreliable for data
  * bursts as it was for voice.  The LC image in RX RAM (12 bytes at 0x00) is
  * now read at every system interrupt instead and judged by its own
- * Reed-Solomon parity, with the header or the terminator mask.  Whether the
- * chip keeps the received parity there is not known yet, so every change of
- * the image is logged with the result of the check.
+ * Reed-Solomon parity, with the header or the terminator mask.  The chip keeps
+ * the received parity bytes there (v31: callers and talkgroups shown
+ * correctly, every header that passed matched the call heard).
  */
 static uint8_t lcImage[12];
 static bool lcHave = false;
@@ -322,10 +325,14 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
     bool term = rs129Match(lc, par, 0x99);
     bool plain = rs129Match(lc, par, 0x00);
 
-    LOG_HEX(LOG_LVL_DEBUG, "dmr", "lc", lc, sizeof(lc));
-    LOG_D("dmr", "lc rs %s 82=%02x 51=%02x",
-          header ? "header" : (term ? "term" : (plain ? "plain" : "bad")), r82,
-          r51);
+    // v31: the chip keeps the received parity, and most changes of the image
+    // are other bursts (2710 failed the check against 98 that passed), so
+    // only the ones that pass are logged.
+    if (header || term || plain) {
+        LOG_HEX(LOG_LVL_DEBUG, "dmr", "lc", lc, sizeof(lc));
+        LOG_D("dmr", "lc rs %s 82=%02x 51=%02x",
+              header ? "header" : (term ? "term" : "plain"), r82, r51);
+    }
 
     uint8_t flco = lc[0] & 0x3F;
     if ((header || plain) && ((flco == 0) || (flco == 3))) {
@@ -350,6 +357,7 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         // The call ends unless voice follows within three slots.
         if (slotsSinceVoice < 17)
             slotsSinceVoice = 17;
+        termSeen = true;
     }
 }
 
