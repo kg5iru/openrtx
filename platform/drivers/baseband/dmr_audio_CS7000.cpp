@@ -14,8 +14,6 @@
  * One burst = 27 bytes = 3 voice frames of 9 bytes.  The stock firmware
  * feeds each 9 byte slice of the burst straight into the codec (it unpacks 72
  * bits MSB first at offset 0, 9 or 18), so no de-interleaving is done here.
- *
- * STATUS: not compiled or tested on hardware.
  */
 
 #include <pthread.h>
@@ -39,15 +37,10 @@ static pthread_t thread;
 static volatile bool running = false;
 static volatile bool reqStop = false;
 static pathId outPath;
-static volatile unsigned framesDecoded = 0;
-static volatile uint8_t decState = 0;
-static volatile unsigned errTotal = 0;
-static volatile unsigned errLast = 0;
-static volatile unsigned gaps = 0;
-static volatile unsigned errPos[3] = { 0, 0, 0 };
-static volatile unsigned badFrames = 0;
-static volatile unsigned vFrames[DMR_VARIANTS];
-static volatile unsigned vBad[DMR_VARIANTS];
+static unsigned framesDecoded = 0;
+static unsigned errTotal = 0;
+static unsigned badFrames = 0;
+static unsigned gaps = 0;
 
 static void *decodeThread(void *arg)
 {
@@ -77,7 +70,6 @@ static void *decodeThread(void *arg)
 
     // Avoid writing to the buffer while the stream is reading it.
     outputStream_sync(oStream, false);
-    decState = 1;
 
     while (!reqStop) {
         if (audioPath_getStatus(outPath) != PATH_OPEN)
@@ -87,17 +79,12 @@ static void *decodeThread(void *arg)
         // bursts are queued, so that slot timing jitter does not insert
         // silence between bursts.
         if (next >= 3) {
-            if (!playing && dmr_voiceQueued() >= 2) {
+            if (!playing && dmr_voiceQueued() >= 2)
                 playing = true;
-                LOG_D("ambe", "playout start, %u bursts queued",
-                      dmr_voiceQueued());
-            }
             if (playing && dmr_popVoiceBurst(frames))
                 next = 0;
-            else if (playing) {
+            else
                 playing = false;
-                LOG_D("ambe", "playout stop, buffer empty");
-            }
         }
 
         stream_sample_t *buf = outputStream_getIdleBuffer(oStream);
@@ -107,33 +94,20 @@ static void *decodeThread(void *arg)
         if (next < 3 && !codecReady) {
             ambe_cs7000_init(&decoder);
             codecReady = true;
-            decState = 2;
         }
 
         if (next < 3) {
             int e = ambe_cs7000_decode(
                 &decoder, &frames[next * AMBE_CS7000_FRAME_BYTES], buf);
-            errLast = (unsigned)e;
             errTotal += (unsigned)e;
-            errPos[next] += (unsigned)e;
             if (e >= 4)
                 badFrames++;
-            {
-                uint8_t v = dmr_variant() % DMR_VARIANTS;
-                vFrames[v]++;
-                if (e >= 4)
-                    vBad[v]++;
-            }
-            LOG_D("ambe", "frame %u.%u errors %d variant %u", framesDecoded,
-                  next, e, dmr_variant() % DMR_VARIANTS);
             framesDecoded++;
             next += 1;
         } else {
             dmrCallInfo_t ci;
-            if (dmr_getCallInfo(&ci)) {
-                gaps++;
-                LOG_D("ambe", "gap: call active but no burst queued");
-            }
+            if (dmr_getCallInfo(&ci))
+                gaps++; // call active but no burst queued
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
         }
 
@@ -145,14 +119,14 @@ static void *decodeThread(void *arg)
           "decode thread stopped: %u frames, %u errors, %u bad, "
           "%u gaps",
           framesDecoded, errTotal, badFrames, gaps);
-    decState = 0;
     running = false;
     return NULL;
 }
 
 bool dmrAudio_start(const pathId path)
 {
-    if (running || !ambe_cs7000_available())
+    // A damaged codec region would crash on the first voice frame.
+    if (running || (dmrAudio_codecStatus() != DMR_CODEC_OK))
         return false;
 
     outPath = path;
@@ -184,109 +158,20 @@ void dmrAudio_stop()
     pthread_join(thread, NULL);
 }
 
-uint8_t dmrAudio_state()
+uint8_t dmrAudio_codecStatus()
 {
-    return decState;
-}
-
-unsigned dmrAudio_frames()
-{
-    return framesDecoded;
-}
-
-const void *dmrAudio_blobCheck()
-{
-    return ambe_cs7000_check();
-}
-
-unsigned dmrAudio_errTotal()
-{
-    return errTotal;
-}
-
-unsigned dmrAudio_errLast()
-{
-    return errLast;
-}
-
-unsigned dmrAudio_gaps()
-{
-    return gaps;
-}
-
-unsigned dmrAudio_errPos(int i)
-{
-    return errPos[i];
-}
-
-unsigned dmrAudio_badFrames()
-{
-    return badFrames;
-}
-
-unsigned dmrAudio_variantFrames(int v)
-{
-    return vFrames[v];
-}
-
-unsigned dmrAudio_variantBad(int v)
-{
-    return vBad[v];
+    if (!ambe_cs7000_available())
+        return DMR_CODEC_MISSING;
+    if (ambe_cs7000_check()->badKb != 0)
+        return DMR_CODEC_DAMAGED;
+    return DMR_CODEC_OK;
 }
 
 #else /* !CS7000_AMBE */
 
-uint8_t dmrAudio_state()
+uint8_t dmrAudio_codecStatus()
 {
-    return 0;
-}
-
-unsigned dmrAudio_frames()
-{
-    return 0;
-}
-
-const void *dmrAudio_blobCheck()
-{
-    return NULL;
-}
-
-unsigned dmrAudio_errTotal()
-{
-    return 0;
-}
-
-unsigned dmrAudio_errLast()
-{
-    return 0;
-}
-
-unsigned dmrAudio_gaps()
-{
-    return 0;
-}
-
-unsigned dmrAudio_errPos(int i)
-{
-    (void)i;
-    return 0;
-}
-
-unsigned dmrAudio_badFrames()
-{
-    return 0;
-}
-
-unsigned dmrAudio_variantFrames(int v)
-{
-    (void)v;
-    return 0;
-}
-
-unsigned dmrAudio_variantBad(int v)
-{
-    (void)v;
-    return 0;
+    return DMR_CODEC_MISSING;
 }
 
 bool dmrAudio_start(const pathId path)

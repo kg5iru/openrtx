@@ -198,14 +198,6 @@ void radio_init(const rtxStatus_t *rtxState)
     C6000.setModOffset(calData.errorRate[0]);
 }
 
-#ifdef CONFIG_DMR_CS7000
-// Diagnostics: errorRate[0] (OpenRTX's boot-time bias) and the stock DMR bias
-extern "C" uint16_t radio_dmrCalPair()
-{
-    return (uint16_t)((calData.errorRate[0] << 8) | calData.vcxoBias);
-}
-#endif
-
 void radio_terminate()
 {
     gpioDev_clear(TX_PWR_EN);       // Disable TX power stage
@@ -306,11 +298,6 @@ void radio_enableRx()
 
     // Set PLL frequency
     uint32_t pllFreq = config->rxFrequency - IF_FREQ;
-#ifdef CONFIG_DMR_CS7000
-    // DMR bring-up test: receive frequency offset (Hz) of the current variant
-    if (config->opMode == OPMODE_DMR)
-        pllFreq = (uint32_t)((int32_t)pllFreq + dmr_variantOffset(dmr_variant()));
-#endif
     SKY73210_setFrequency(&pll, pllFreq, 3);
 
     // Set input filter tune voltage

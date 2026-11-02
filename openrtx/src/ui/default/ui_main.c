@@ -17,8 +17,6 @@
 #ifdef CONFIG_DMR_CS7000
 #include "dmr_CS7000.h"
 #include "dmr_audio_CS7000.h"
-#include "ambe_cs7000.h"
-extern uint16_t radio_dmrCalPair(void);
 #endif
 
 void _ui_drawMainBackground()
@@ -130,9 +128,6 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
         {
             #ifdef CONFIG_DMR_CS7000
             dmrCallInfo_t call;
-            dmrDebug_t dbg;
-            dmr_getDebug(&dbg);
-
             if(dmr_getCallInfo(&call))
             {
                 gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
@@ -144,54 +139,23 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             else
             {
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "f%u g%u t%04X", dmrAudio_frames(),
-                          dmrAudio_gaps(), (unsigned) radio_dmrCalPair());
+                          color_white, "DMR");
             }
 
-            // Codec region check: end offset, sum, bad 1 kB blocks, first
-            // and last bad block offsets, first bytes of the first bad block
+            // Voice cannot be played without an intact codec region
+            switch(dmrAudio_codecStatus())
             {
-                const ambe_cs7000_check_t *ck = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
-                if(ck != NULL)
-                {
-                    if(ck->badKb != 0)
-                        gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                                  color_white, "k%05lX %04X x%u", (unsigned long) ck->end,
-                                  (unsigned) ck->sum, (unsigned) ck->badKb);
-                    else
-                        // Codec fine: FEC errors total / last frame, voice
-                        // bursts dropped, silent buffers during a call
-                        gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                                  color_white, "%u/%u a%lu g%lu",
-                                  dmrAudio_variantBad(0), dmrAudio_variantFrames(0),
-                                  (unsigned long) dbg.vAccepted,
-                                  (unsigned long) dbg.vGarbage);
-                    if(ck->badKb != 0)
-                        gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
-                                  color_white, "%05lX-%05lX %02X%02X%02X%02X",
-                                  (unsigned long) ck->firstBad, (unsigned long) ck->lastBad,
-                                  ck->bytes[0], ck->bytes[1], ck->bytes[2], ck->bytes[3]);
-                }
+                case DMR_CODEC_MISSING:
+                    gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                              color_white, "no voice codec");
+                    break;
+                case DMR_CODEC_DAMAGED:
+                    gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                              color_white, "voice codec damaged");
+                    break;
+                default:
+                    break;
             }
-
-            // Interrupts: slot, system, flags ORed / last, heartbeat
-            // (the codec check above takes this line when it finds bad blocks)
-            const ambe_cs7000_check_t *ck2 = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
-            if((ck2 == NULL) || (ck2->badKb == 0))
-            // Voice port: duplicate reads, partly valid bursts, silence
-            // repeats, bursts lost to a full FIFO
-            gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
-                      color_white, "d%lu p%lu r%lu x%lu",
-                      (unsigned long) dbg.vDup, (unsigned long) dbg.vPartial,
-                      (unsigned long) dbg.vRepeat, (unsigned long) dbg.vDropped);
-
-            // Bursts, headers, last burst status, colour code
-            if(!dmr_getCallInfo(&call))
-                gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "b%u h%u v%u d%u s%02X c%u",
-                          (unsigned) dbg.bursts, (unsigned) dbg.headers,
-                          (unsigned) dbg.nVoice, (unsigned) dbg.nData,
-                          dbg.v51, dbg.cc);
             #endif
             break;
         }

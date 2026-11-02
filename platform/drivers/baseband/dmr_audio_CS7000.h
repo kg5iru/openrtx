@@ -28,25 +28,12 @@ bool dmrAudio_start(const pathId path);
 /** Stop the thread and wait for it to terminate. */
 void dmrAudio_stop();
 
-/** Diagnostics: decoder thread state (0 off, 1 running, 2 codec initialised) and voice frames decoded. */
-uint8_t dmrAudio_state();
-unsigned dmrAudio_frames();
+#define DMR_CODEC_OK 0      ///< codec region present and intact
+#define DMR_CODEC_MISSING 1 ///< built without the codec, or region erased
+#define DMR_CODEC_DAMAGED 2 ///< region present but its checksums differ
 
-/** Diagnostics: FEC errors (total, last frame) and silent buffers played during a call. */
-unsigned dmrAudio_errTotal();
-unsigned dmrAudio_errLast();
-unsigned dmrAudio_gaps();
-
-/** Diagnostics: FEC errors summed per frame position in the burst (0..2), frames with 4+ errors. */
-unsigned dmrAudio_errPos(int i);
-unsigned dmrAudio_badFrames();
-
-/** Diagnostics: frames and frames with 4+ errors under register set v (0..3). */
-unsigned dmrAudio_variantFrames(int v);
-unsigned dmrAudio_variantBad(int v);
-
-/** Diagnostics: integrity check of the codec region (NULL without codec support). */
-const void *dmrAudio_blobCheck();
+/** State of the codec region in flash (checked once, at the first call). */
+uint8_t dmrAudio_codecStatus();
 
 #ifdef __cplusplus
 }
