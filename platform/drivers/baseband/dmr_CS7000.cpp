@@ -230,7 +230,16 @@ static void endCall()
     vTail = vHead;
     rxState = DmrRxState::LISTENING;
 
-    // v27: reading at the next slot was no better; always read at the event
+    // v27: reading at the next slot was no better; always read at the event.
+    // Now A/B testing the V_SPI clock mode instead, one call each:
+    // 0 = CPOL 0 / CPHA 1 (as decoded from the stock firmware),
+    // 1 = CPOL 1 / CPHA 0 (what the MD-UV3x0 DMR work uses for this chip).
+    variant = (variant + 1) % 2;
+    SPI1->CR1 &= ~SPI_CR1_SPE;
+    uint32_t cfg2 = SPI1->CFG2 & ~(SPI_CFG2_CPOL | SPI_CFG2_CPHA);
+    SPI1->CFG2 = cfg2 | ((variant == 0) ? SPI_CFG2_CPHA : SPI_CFG2_CPOL);
+    LOG_I("dmr", "next call: V_SPI mode %s",
+          (variant == 0) ? "CPOL0/CPHA1" : "CPOL1/CPHA0");
 }
 
 static void handleSys()
