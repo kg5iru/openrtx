@@ -453,6 +453,13 @@ void radio_updateConfiguration()
     else
         C6000.setModOffset(calData.errorRate[0]);
 
+#ifdef CONFIG_DMR_CS7000
+    // Colour code: the stock channel load writes it to reg 0x1F, high nibble
+    // (dmrMode() leaves colour code 1 there).
+    if(config->opMode == OPMODE_DMR)
+        C6000.writeCfgRegister(0x1F, (config->dmrColourCode & 0x0F) << 4);
+#endif
+
     // RSSI interpolation curve
     rssi = interpRssi(config->rxFrequency, rssiCal);
 

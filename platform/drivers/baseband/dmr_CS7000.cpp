@@ -155,6 +155,24 @@ static bool voicePathOn = false;
 static uint32_t callBursts = 0;
 static uint32_t callDropped = 0;
 
+/*
+ * Talkgroup filter.  A call is muted (not played, not shown) when it is a
+ * group call to another talkgroup, or when a talkgroup is set and the call's
+ * header was missed (late entry: its talkgroup is unknown).
+ */
+static volatile uint32_t rxTalkgroup = 0;
+static volatile bool callMuted = false;
+
+/*
+ * Timeslot bring-up: the slot of a burst is not decoded yet.  Each call's
+ * first voice burst is logged with the slot counter parity and registers
+ * 0x52 and 0x57 (read at the last system interrupt), to find out which of
+ * them follows the timeslot.
+ */
+static volatile uint32_t slotCount = 0;
+static uint8_t last52 = 0;
+static uint8_t last57 = 0;
+
 static void endCall(const char *why)
 {
     if (callActive)
@@ -163,6 +181,7 @@ static void endCall(const char *why)
     // The voice FIFO is left to drain: the last bursts of the call are still
     // waiting to be played.
     callActive = false;
+    callMuted = false;
     voicePathOn = false;
     termSeen = false;
 }
@@ -194,12 +213,27 @@ static void pollVoicePort()
     haveLast = true;
 
     // Late entry: voice without a header seen still opens the call, so its
-    // audio is played; the IDs stay those of the last header.
+    // audio is played; the IDs stay those of the last header.  With a
+    // talkgroup filter set, its talkgroup is unknown: muted until a header.
     if (!callActive) {
         callActive = true;
+        callMuted = (rxTalkgroup != 0);
         callBursts = 0;
         callDropped = 0;
-        LOG_I("dmr", "call start: late entry");
+        LOG_I("dmr", "call start: late entry%s",
+              callMuted ? ", muted (talkgroup unknown)" : "");
+    }
+
+    if (callBursts == 0)
+        LOG_D("dmr", "first voice: slot %lu (parity %lu) 52=%02x 57=%02x",
+              (unsigned long)slotCount, (unsigned long)(slotCount & 1), last52,
+              last57);
+
+    slotsSinceVoice = 0;
+    termSeen = false;
+    if (callMuted) {
+        callBursts++;
+        return;
     }
 
     uint8_t nh = (vHead + 1) % VOICE_FIFO;
@@ -216,13 +250,13 @@ static void pollVoicePort()
         C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
         voicePathOn = true;
     }
-    slotsSinceVoice = 0;
-    termSeen = false;
 }
 
 // DMR_TS_INT / TIME_SLOT_INTER (PC0 -> EXTI0): every slot (30 ms).
 static void handleSlot()
 {
+    slotCount++;
+
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
     // boundary.  0x50 = receive with the layer 2 access bit set.
@@ -343,10 +377,13 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         callInfo.flco = flco;
         callInfo.dst = dst;
         callInfo.src = src;
-        // TODO: filter on configured talkgroup / contact.
+        // Private calls always pass: there is no own-ID setting yet.
+        uint32_t tg = rxTalkgroup;
+        callMuted = (flco == 0) && (tg != 0) && (dst != tg);
         if (changed)
-            LOG_I("dmr", "call: flco %u src %lu dst %lu", flco,
-                  (unsigned long)src, (unsigned long)dst);
+            LOG_I("dmr", "call: flco %u src %lu dst %lu%s 52=%02x 57=%02x",
+                  flco, (unsigned long)src, (unsigned long)dst,
+                  callMuted ? " (muted)" : "", last52, last57);
         if (!callActive) {
             callBursts = 0;
             callDropped = 0;
@@ -377,9 +414,10 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
 static void handleSys()
 {
     uint8_t flags = C6000.readCfgRegister(0x82);
-    (void)C6000.readCfgRegister(0x52);
+    last52 = C6000.readCfgRegister(0x52);
     uint8_t reg51 = C6000.readCfgRegister(0x51);
     (void)C6000.readCfgRegister(0x5F);
+    last57 = C6000.readCfgRegister(0x57);
 
     pollLinkControl(flags, reg51);
 
@@ -496,9 +534,14 @@ unsigned dmr_voiceQueued()
     return (unsigned)((vHead + VOICE_FIFO - vTail) % VOICE_FIFO);
 }
 
+void dmr_setRxTalkgroup(uint32_t tg)
+{
+    rxTalkgroup = tg;
+}
+
 bool dmr_getCallInfo(dmrCallInfo_t *out)
 {
-    if (!callActive)
+    if (!callActive || callMuted)
         return false;
     *out = callInfo;
     return true;

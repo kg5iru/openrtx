@@ -43,6 +43,12 @@ bool dmr_popVoiceBurst(uint8_t out[27]);
 /** Number of voice bursts waiting to be played. */
 unsigned dmr_voiceQueued();
 
+/**
+ * Talkgroup to receive: group calls to other talkgroups are muted and not
+ * shown.  0 receives every call.  Private calls are always received.
+ */
+void dmr_setRxTalkgroup(uint32_t tg);
+
 #ifdef __cplusplus
 }
 #endif
