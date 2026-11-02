@@ -138,8 +138,16 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             }
             else
             {
-                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "DMR");
+                // Idle: colour code and talkgroup filter
+                if(last_state.settings.dmr_rxTg == 0)
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "DMR CC%u All",
+                              settings_dmrColourCode(&last_state.settings));
+                else
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "DMR CC%u TG%lu",
+                              settings_dmrColourCode(&last_state.settings),
+                              (unsigned long) last_state.settings.dmr_rxTg);
             }
 
             // Voice cannot be played without an intact codec region

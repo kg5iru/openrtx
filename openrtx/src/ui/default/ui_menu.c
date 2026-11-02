@@ -450,6 +450,61 @@ int _ui_getM17ValueName(char *buf, uint8_t max_len, uint8_t index)
 }
 #endif
 
+#ifdef CONFIG_DMR_CS7000
+// Talkgroup being typed, shown in place of the stored one while editing
+static const char *dmrTgTyping = NULL;
+
+int _ui_getDMREntryName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_dmr_num)
+        return -1;
+
+    sniprintf(buf, max_len, "%s", settings_dmr_items[index]);
+    return 0;
+}
+
+int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_dmr_num)
+        return -1;
+
+    switch(index)
+    {
+        case DMR_COLOUR_CODE:
+            sniprintf(buf, max_len, "%u",
+                      settings_dmrColourCode(&last_state.settings));
+            break;
+
+        case DMR_TALKGROUP:
+            if(dmrTgTyping != NULL)
+                sniprintf(buf, max_len, "%s_", dmrTgTyping);
+            else if(last_state.settings.dmr_rxTg == 0)
+                sniprintf(buf, max_len, "All");
+            else
+                sniprintf(buf, max_len, "%lu",
+                          (unsigned long) last_state.settings.dmr_rxTg);
+            break;
+    }
+
+    return 0;
+}
+
+void _ui_drawSettingsDMR(ui_state_t* ui_state)
+{
+    gfx_clearScreen();
+    // Print "DMR" on top bar
+    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
+              "DMR");
+
+    bool typing = ui_state->edit_mode &&
+                  (ui_state->menu_selected == DMR_TALKGROUP);
+    dmrTgTyping = typing ? ui_state->new_dmr_tg : NULL;
+    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+                          _ui_getDMREntryName, _ui_getDMRValueName);
+    dmrTgTyping = NULL;
+}
+#endif
+
 int _ui_getFMEntryName(char* buf, uint8_t max_len, uint8_t index)
 {
     if (index >= settings_fm_num)

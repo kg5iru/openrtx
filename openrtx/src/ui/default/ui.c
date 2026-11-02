@@ -99,6 +99,9 @@ extern void _ui_drawSettingsTimeDateSet(ui_state_t* ui_state);
 extern void _ui_drawSettingsDisplay(ui_state_t* ui_state);
 extern void _ui_drawSettingsM17(ui_state_t* ui_state);
 extern void _ui_drawSettingsFM(ui_state_t* ui_state);
+#ifdef CONFIG_DMR_CS7000
+extern void _ui_drawSettingsDMR(ui_state_t* ui_state);
+#endif
 extern void _ui_drawSettingsVoicePrompts(ui_state_t* ui_state);
 extern void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state);
 extern void _ui_drawSettingsRadio(ui_state_t* ui_state);
@@ -130,6 +133,9 @@ const char *settings_items[] =
     "Radio",
 #ifdef CONFIG_M17
     "M17",
+#endif
+#ifdef CONFIG_DMR_CS7000
+    "DMR",
 #endif
     "FM",
     "Accessibility",
@@ -173,6 +179,14 @@ const char * settings_m17_items[] =
     "CAN",
     "CAN RX Check"
 };
+
+#ifdef CONFIG_DMR_CS7000
+const char *settings_dmr_items[] =
+{
+    "Colour Code",
+    "Talkgroup"
+};
+#endif
 
 const char* settings_fm_items[] =
 {
@@ -265,6 +279,9 @@ const uint8_t settings_radio_num = sizeof(settings_radio_items)/sizeof(settings_
 const uint8_t settings_m17_num = sizeof(settings_m17_items)/sizeof(settings_m17_items[0]);
 #endif
 const uint8_t settings_fm_num = sizeof(settings_fm_items) / sizeof(settings_fm_items[0]);
+#ifdef CONFIG_DMR_CS7000
+const uint8_t settings_dmr_num = sizeof(settings_dmr_items) / sizeof(settings_dmr_items[0]);
+#endif
 const uint8_t settings_accessibility_num = sizeof(settings_accessibility_items)/sizeof(settings_accessibility_items[0]);
 const uint8_t backup_restore_num = sizeof(backup_restore_items)/sizeof(backup_restore_items[0]);
 const uint8_t info_num = sizeof(info_items)/sizeof(info_items[0]);
@@ -1986,6 +2003,11 @@ void ui_updateFSM(bool *sync_rtx)
                             state.ui_screen = SETTINGS_M17;
                             break;
 #endif
+#ifdef CONFIG_DMR_CS7000
+                        case S_DMR:
+                            state.ui_screen = SETTINGS_DMR;
+                            break;
+#endif
                         case S_FM:
                             state.ui_screen = SETTINGS_FM;
                             break;
@@ -2466,6 +2488,84 @@ void ui_updateFSM(bool *sync_rtx)
                 }
                 break;
 #endif
+#ifdef CONFIG_DMR_CS7000
+            // DMR Settings: colour code and receive talkgroup filter
+            case SETTINGS_DMR:
+                if(ui_state.edit_mode)
+                {
+                    if(ui_state.menu_selected == DMR_COLOUR_CODE)
+                    {
+                        uint8_t cc = settings_dmrColourCode(&state.settings);
+                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
+                           msg.keys & KEY_LEFT)
+                            settings_setDmrColourCode(&state.settings, cc + 15);
+                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
+                                msg.keys & KEY_RIGHT)
+                            settings_setDmrColourCode(&state.settings, cc + 1);
+                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        *sync_rtx = true;
+                    }
+                    else // DMR_TALKGROUP: digits, 0 or empty = all
+                    {
+                        size_t len = strnlen(ui_state.new_dmr_tg,
+                                             sizeof(ui_state.new_dmr_tg));
+                        if(msg.keys & KEY_ENTER)
+                        {
+                            uint32_t tg = 0;
+                            for(size_t i = 0; i < len; i++)
+                                tg = (tg * 10) + (ui_state.new_dmr_tg[i] - '0');
+                            if(tg > 16777215)
+                                tg = 16777215;
+                            state.settings.dmr_rxTg = tg;
+                            ui_state.edit_mode = false;
+                            *sync_rtx = true;
+                        }
+                        else if(msg.keys & KEY_ESC)
+                        {
+                            ui_state.edit_mode = false;
+                        }
+                        else if(msg.keys & KEY_UP || msg.keys & KEY_DOWN ||
+                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT)
+                        {
+                            if(len > 0)
+                                ui_state.new_dmr_tg[len - 1] = '\0';
+                        }
+                        else if(input_isNumberPressed(msg) &&
+                                (len < (sizeof(ui_state.new_dmr_tg) - 1)))
+                        {
+                            ui_state.new_dmr_tg[len] = '0' +
+                                                input_getPressedNumber(msg);
+                            ui_state.new_dmr_tg[len + 1] = '\0';
+                        }
+                    }
+                }
+                else if(msg.keys & KEY_ENTER)
+                {
+                    ui_state.edit_mode = true;
+                    if(ui_state.menu_selected == DMR_TALKGROUP)
+                        memset(ui_state.new_dmr_tg, 0,
+                               sizeof(ui_state.new_dmr_tg));
+                }
+                else if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                    _ui_menuUp(settings_dmr_num);
+                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                    _ui_menuDown(settings_dmr_num);
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_COLOUR_CODE))
+                {
+                    uint8_t cc = settings_dmrColourCode(&state.settings);
+                    cc += (msg.keys & KEY_RIGHT) ? 1 : 15;
+                    settings_setDmrColourCode(&state.settings, cc);
+                    *sync_rtx = true;
+                }
+                else if(msg.keys & KEY_ESC)
+                {
+                    *sync_rtx = true;
+                    _ui_menuBack(MENU_SETTINGS);
+                }
+                break;
+#endif
             case SETTINGS_FM:
                 if (ui_state.edit_mode)
                 {
@@ -2752,6 +2852,11 @@ bool ui_updateGUI()
             break;
 #endif
         // FM settings screen
+#ifdef CONFIG_DMR_CS7000
+        case SETTINGS_DMR:
+            _ui_drawSettingsDMR(&ui_state);
+            break;
+#endif
         case SETTINGS_FM:
             _ui_drawSettingsFM(&ui_state);
             break;
