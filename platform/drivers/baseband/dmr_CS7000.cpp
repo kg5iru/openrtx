@@ -111,51 +111,149 @@ static void endCall();
 
 static uint8_t slotsSinceVoice = 0;
 
-static volatile bool deferredRead = false;
-static uint8_t earlyRead[27];
+/*
+ * Voice capture.
+ *
+ * v28's capture (call.log, 2026-11-01) settled what was wrong with the audio:
+ * decoded offline, every burst read from the voice port was either clean (all
+ * three AMBE+2 frames valid Golay codewords, no bit errors at all) or pure
+ * noise (all three random), almost never in between.  So the demodulator was
+ * fine; the bad half of the bursts were reads of whatever else the port held
+ * (the hotspot's idle slot, mostly), taken because register 0x51 described a
+ * voice burst when there was none.  0x51 does not track the bursts reliably
+ * here.  Both V_SPI clock modes gave the same split, so the mode was not it
+ * either.
+ *
+ * So the port is now read at every chip event, and the payload itself decides:
+ * a burst is voice when the first Golay(24,12) word of each of its three frames
+ * is a codeword with at most one bit flipped.  Random data passes that for one
+ * frame 1.2% of the time, for all three about two in a million.  The silence
+ * frame (B9 E8 81 52 61 73 00 2A 6B) passes, and so does all of the clean audio
+ * in the capture.
+ */
 
-// Read the voice port into the FIFO.  'late' marks a deferred read, which is
-// compared with the copy taken at the burst event.
-static void pushVoice(bool late)
+// Positions, in the 72 on-air bits of an AMBE+2 frame (MSB of byte 0 first),
+// of the 24 bits of its first Golay word, as in MMDVMHost (AMBEFEC.cpp).
+static const uint8_t golayA[24] = {
+    0,  4,  8,  12, 16, 20, 24, 28, 32, 36, 40, 44,
+    48, 52, 56, 60, 64, 68, 1,  5,  9,  13, 17, 21
+};
+
+static uint16_t golaySingle[23]; // syndromes of the 23 single-bit errors
+
+static uint16_t golaySyndrome(uint32_t v) // v: 23-bit Golay(23,12) word
 {
+    for (int i = 22; i >= 11; i--)
+        if ((v >> i) & 1)
+            v ^= 0xC75u << (i - 11);
+    return (uint16_t)v;
+}
+
+static void golayInit()
+{
+    for (int i = 0; i < 23; i++)
+        golaySingle[i] = golaySyndrome(1u << i);
+}
+
+static bool frameIsVoice(const uint8_t *f)
+{
+    uint32_t a = 0;
+    for (int i = 0; i < 24; i++) {
+        uint8_t pos = golayA[i];
+        a = (a << 1) | ((f[pos >> 3] >> (7 - (pos & 7))) & 1);
+    }
+    uint16_t syn = golaySyndrome(a >> 1); // drop the parity bit
+    if (syn == 0)
+        return true;
+    for (int i = 0; i < 23; i++)
+        if (syn == golaySingle[i])
+            return true;
+    return false;
+}
+
+static uint8_t lastVoice[27];
+static bool haveLast = false;
+static uint32_t lastVoiceSlot = 0;
+static uint8_t repeatRun = 0;
+
+// Read the voice port and queue its burst if it is a new voice burst.
+// 'ev' says which interrupt this is (0 = slot, 1 = system), 'r51' and 'r82'
+// are the status registers read at that event (0 for a slot event), logged
+// alongside to see which events carry the bursts.
+static void pollVoicePort(uint8_t ev, uint8_t r82, uint8_t r51)
+{
+    uint8_t buf[27];
+    vspiReadVoice(buf);
+    dbg.vReads++;
+
+    int good = 0;
+    for (int i = 0; i < 3; i++)
+        if (frameIsVoice(&buf[9 * i]))
+            good++;
+    if (good == 0) {
+        dbg.vGarbage++;
+        return;
+    }
+    if (good < 3) {
+        dbg.vPartial++;
+        LOG_D("dmr", "voice port: %d of 3 frames valid, burst dropped", good);
+        return;
+    }
+
+    bool same = haveLast;
+    for (int i = 0; same && (i < 27); i++)
+        if (buf[i] != lastVoice[i])
+            same = false;
+
+    if (same) {
+        // The port holds a burst until something else is received, so the
+        // same bytes are read again at later events.  A repeat is only taken
+        // as a new burst (a run of identical silence frames) when at least
+        // three slots have passed, a voice burst coming every two, never to
+        // open a call, and for at most about three seconds.
+        if (!callActive || ((dbg.irqSlot - lastVoiceSlot) < 3) ||
+            (repeatRun >= 34)) {
+            dbg.vDup++;
+            return;
+        }
+        repeatRun++;
+        dbg.vRepeat++;
+    } else {
+        repeatRun = 0;
+    }
+
+    for (int i = 0; i < 27; i++)
+        lastVoice[i] = buf[i];
+    haveLast = true;
+    lastVoiceSlot = dbg.irqSlot;
+
     uint8_t nh = (vHead + 1) % VOICE_FIFO;
     if (nh == vTail) {
         dbg.vDropped++; // full: drop the oldest
         LOG_W("dmr", "voice FIFO full, oldest burst dropped");
         vTail = (vTail + 1) % VOICE_FIFO;
     }
-    vspiReadVoice(voiceFifo[vHead]);
-
-    const uint8_t *ref = late ? earlyRead : nullptr;
-    uint8_t again[27];
-    if (ref == nullptr) {
-        vspiReadVoice(again); // immediate re-read
-        ref = again;
-    }
-    for (int i = 0; i < 27; i++) {
-        if (ref[i] != voiceFifo[vHead][i]) {
-            dbg.vMismatch++;
-            LOG_D("dmr", "voice reread differs at byte %d (%s)", i,
-                  late ? "deferred" : "immediate");
-            break;
-        }
-    }
-
-    const uint8_t *prev = voiceFifo[(vHead + VOICE_FIFO - 1) % VOICE_FIFO];
-    bool same = true;
     for (int i = 0; i < 27; i++)
-        if (prev[i] != voiceFifo[vHead][i])
-            same = false;
-    if (same) {
-        dbg.vDup++;
-        LOG_D("dmr", "voice burst identical to the previous one");
-    }
-
-    LOG_HEX(LOG_LVL_DEBUG, "dmr", late ? "voice(late)" : "voice",
-            voiceFifo[vHead], 27);
-
+        voiceFifo[vHead][i] = buf[i];
     vHead = nh;
-    deferredRead = false;
+    dbg.vAccepted++;
+
+    LOG_D("dmr", "voice ok %s slot %lu 82=%02x 51=%02x%s",
+          ev ? "sys" : "slot", (unsigned long) dbg.irqSlot, r82, r51,
+          same ? " (repeat)" : "");
+    LOG_HEX(LOG_LVL_DEBUG, "dmr", "voice", buf, 27);
+
+    // Late entry: voice without a header seen (header missed, or the call
+    // was ended early by the timeout) still opens the call, so its audio is
+    // played; the IDs stay those of the last header.
+    if (!callActive) {
+        callActive = true;
+        LOG_I("dmr", "call start: late entry, no header seen");
+    }
+    if (rxState != DmrRxState::VOICE_RX)
+        C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
+    rxState = DmrRxState::VOICE_RX;
+    slotsSinceVoice = 0;
 }
 
 static void handleSlot()
@@ -171,8 +269,7 @@ static void handleSlot()
     // 0.4 s, and it rewrote the sync enable register (0x5F) to 0x30.
     C6000.writeCfgRegister(0x41, 0x50);
 
-    if (deferredRead)
-        pushVoice(true);
+    pollVoicePort(0, 0, 0);
 
     // End a call whose terminator was missed: no voice for 20 slots (600 ms).
     if (callActive && (++slotsSinceVoice >= 20)) {
@@ -226,20 +323,10 @@ uint8_t dmr_variant()
 
 static void endCall()
 {
+    // The voice FIFO is left to drain: a terminator ends the call after its
+    // last voice burst, which is still waiting to be played.
     callActive = false;
-    vTail = vHead;
     rxState = DmrRxState::LISTENING;
-
-    // v27: reading at the next slot was no better; always read at the event.
-    // Now A/B testing the V_SPI clock mode instead, one call each:
-    // 0 = CPOL 0 / CPHA 1 (as decoded from the stock firmware),
-    // 1 = CPOL 1 / CPHA 0 (what the MD-UV3x0 DMR work uses for this chip).
-    variant = (variant + 1) % 2;
-    SPI1->CR1 &= ~SPI_CR1_SPE;
-    uint32_t cfg2 = SPI1->CFG2 & ~(SPI_CFG2_CPOL | SPI_CFG2_CPHA);
-    SPI1->CFG2 = cfg2 | ((variant == 0) ? SPI_CFG2_CPHA : SPI_CFG2_CPOL);
-    LOG_I("dmr", "next call: V_SPI mode %s",
-          (variant == 0) ? "CPOL0/CPHA1" : "CPOL1/CPHA0");
 }
 
 static void handleSys()
@@ -252,8 +339,11 @@ static void handleSys()
     uint8_t sync = C6000.readCfgRegister(0x5F);
 
     uint8_t rxCc = (reg52 >> 4) & 0x0F;
-    LOG_D("dmr", "sys 82=%02x 51=%02x 52=%02x 5f=%02x", flags, reg51, reg52,
-          sync);
+    // v28 logged this for every event (about 200 a second); now only for
+    // the events flagged "data received" (0x82 bit 3).
+    if (flags & 0x08)
+        LOG_D("dmr", "sys 82=%02x 51=%02x 52=%02x 5f=%02x", flags, reg51,
+              reg52, sync);
     dbg.flagsLast = flags;
     dbg.flagsOr |= flags;
     dbg.sync = sync;
@@ -308,34 +398,12 @@ static void handleSys()
         } else {
             dbg.nVoice++;
         }
-        // Late entry: a voice burst without a header seen (header missed, or
-        // the call was ended early by the timeout) still opens the call, so
-        // its audio is played; the IDs stay those of the last header.
-        if (cls == 1 && !callActive) {
-            callActive = true;
-            slotsSinceVoice = 0;
-            LOG_I("dmr", "call start: late entry, no header seen");
-        }
-        if (cls == 1 && callActive) // voice burst
-        {
-            // Voice bytes come from V_SPI (see vspiReadVoice).  The RX RAM
-            // windows (0x30/0x60) are not the codec input in the stock
-            // firmware.
-            if (rxState != DmrRxState::VOICE_RX)
-                C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
-
-            // Read the voice port at the burst event (v27: reading at the next
-            // slot interrupt was no better).
-            if (deferredRead)
-                pushVoice(true); // previous burst still pending
-            pushVoice(false);
-
-            slotsSinceVoice = 0;
-            rxState = DmrRxState::VOICE_RX;
-        }
     }
 
     C6000.writeCfgRegister(0x83, flags);
+
+    // Voice: judged by the payload, at every event (see pollVoicePort).
+    pollVoicePort(1, flags, reg51);
 }
 
 // DMR_TX_INT / RF_TX_INTER (GPIOC,2 -> EXTI2): fires ahead of a TX slot
@@ -391,6 +459,9 @@ void EXTI2_IRQHandler()
 void dmr_init()
 {
     variant = 0;
+    golayInit();
+    haveLast = false;
+    repeatRun = 0;
     dmrRunning = true;
 
     gpio_setMode(DMR_TS_INT, INPUT);
@@ -510,6 +581,11 @@ void dmr_getDebug(dmrDebug_t *out)
     out->flagsOr = dbg.flagsOr;
     out->flagsLast = dbg.flagsLast;
     out->polls = dbg.polls;
+    out->vReads = dbg.vReads;
+    out->vAccepted = dbg.vAccepted;
+    out->vGarbage = dbg.vGarbage;
+    out->vPartial = dbg.vPartial;
+    out->vRepeat = dbg.vRepeat;
 }
 
 void dmr_pollDiag()

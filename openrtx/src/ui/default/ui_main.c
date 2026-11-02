@@ -162,10 +162,10 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                         // Codec fine: FEC errors total / last frame, voice
                         // bursts dropped, silent buffers during a call
                         gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
-                                  color_white, "%u/%u %u/%u %u/%u",
+                                  color_white, "%u/%u a%lu g%lu",
                                   dmrAudio_variantBad(0), dmrAudio_variantFrames(0),
-                                  dmrAudio_variantBad(1), dmrAudio_variantFrames(1),
-                                  dmrAudio_variantBad(2), dmrAudio_variantFrames(2));
+                                  (unsigned long) dbg.vAccepted,
+                                  (unsigned long) dbg.vGarbage);
                     if(ck->badKb != 0)
                         gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
                                   color_white, "%05lX-%05lX %02X%02X%02X%02X",
@@ -178,12 +178,12 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             // (the codec check above takes this line when it finds bad blocks)
             const ambe_cs7000_check_t *ck2 = (const ambe_cs7000_check_t *) dmrAudio_blobCheck();
             if((ck2 == NULL) || (ck2->badKb == 0))
-            // Register A/B test: bad/total frames for sets C and D
+            // Voice port: duplicate reads, partly valid bursts, silence
+            // repeats, bursts lost to a full FIFO
             gfx_print(layout.line4_pos, layout.line4_font, TEXT_ALIGN_CENTER,
-                      color_white, "%u/%u %u/%u v%u m%lu",
-                      dmrAudio_variantBad(3), dmrAudio_variantFrames(3),
-                      dmrAudio_variantBad(4), dmrAudio_variantFrames(4),
-                      (unsigned) dmr_variant(), (unsigned long) dbg.vMismatch);
+                      color_white, "d%lu p%lu r%lu x%lu",
+                      (unsigned long) dbg.vDup, (unsigned long) dbg.vPartial,
+                      (unsigned long) dbg.vRepeat, (unsigned long) dbg.vDropped);
 
             // Bursts, headers, last burst status, colour code
             if(!dmr_getCallInfo(&call))

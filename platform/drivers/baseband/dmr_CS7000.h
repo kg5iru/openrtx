@@ -63,6 +63,11 @@ typedef struct {
     uint32_t vMismatch; ///< voice reads that differed when read twice
     uint32_t vDup;      ///< voice bursts identical to the previous one
     uint8_t pins;       ///< levels of PC0 (bit 0), PC2 (bit 1), PC3 (bit 2)
+    uint32_t vReads;    ///< voice port reads (one per chip event)
+    uint32_t vAccepted; ///< voice bursts queued for the codec
+    uint32_t vGarbage;  ///< reads with no valid AMBE+2 frame
+    uint32_t vPartial;  ///< reads with one or two valid frames (dropped)
+    uint32_t vRepeat;   ///< identical bursts queued as new (silence runs)
 } dmrDebug_t;
 
 void dmr_getDebug(dmrDebug_t *out);
