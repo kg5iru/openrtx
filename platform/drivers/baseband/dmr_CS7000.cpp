@@ -238,6 +238,125 @@ static uint32_t be24(const uint8_t *p)
 }
 
 /*
+ * Reed-Solomon (12,9) check of a full link control (ETSI TS 102 361-1 B.3.6,
+ * as in MMDVMHost RS129.cpp): GF(256) with polynomial 0x11D, generator roots
+ * alpha^1..alpha^3.  The three parity bytes are sent XORed with a mask that
+ * tells a voice LC header (0x96) from a terminator with LC (0x99).
+ */
+static uint8_t gfExp[512];
+static uint8_t gfLog[256];
+
+static void gfInit()
+{
+    uint16_t x = 1;
+    for (int i = 0; i < 255; i++) {
+        gfExp[i] = (uint8_t)x;
+        gfLog[x] = (uint8_t)i;
+        x <<= 1;
+        if (x & 0x100)
+            x ^= 0x11D;
+    }
+    for (int i = 255; i < 512; i++)
+        gfExp[i] = gfExp[i - 255];
+}
+
+static uint8_t gfMul(uint8_t a, uint8_t b)
+{
+    if ((a == 0) || (b == 0))
+        return 0;
+    return gfExp[gfLog[a] + gfLog[b]];
+}
+
+// Parity bytes in the order they follow the 9 data bytes.
+static void rs129Parity(const uint8_t *data, uint8_t out[3])
+{
+    static const uint8_t poly[3] = { 64, 56, 14 };
+    uint8_t par[3] = { 0, 0, 0 };
+    for (int i = 0; i < 9; i++) {
+        uint8_t d = data[i] ^ par[2];
+        par[2] = par[1] ^ gfMul(poly[2], d);
+        par[1] = par[0] ^ gfMul(poly[1], d);
+        par[0] = gfMul(poly[0], d);
+    }
+    out[0] = par[2];
+    out[1] = par[1];
+    out[2] = par[0];
+}
+
+static bool rs129Match(const uint8_t *lc, const uint8_t par[3], uint8_t mask)
+{
+    return ((lc[9] ^ mask) == par[0]) && ((lc[10] ^ mask) == par[1])
+        && ((lc[11] ^ mask) == par[2]);
+}
+
+/*
+ * Link control.  v29 and v30 showed no caller at all: the header was read
+ * only when 0x51 said "voice LC header", and 0x51 is as unreliable for data
+ * bursts as it was for voice.  The LC image in RX RAM (12 bytes at 0x00) is
+ * now read at every system interrupt instead and judged by its own
+ * Reed-Solomon parity, with the header or the terminator mask.  Whether the
+ * chip keeps the received parity there is not known yet, so every change of
+ * the image is logged with the result of the check.
+ */
+static uint8_t lcImage[12];
+static bool lcHave = false;
+
+static void pollLinkControl(uint8_t r82, uint8_t r51)
+{
+    uint8_t lc[12];
+    C6000.readRxBurst(0x00, lc, sizeof(lc));
+
+    bool same = lcHave;
+    for (int i = 0; same && (i < 12); i++)
+        if (lc[i] != lcImage[i])
+            same = false;
+    if (same)
+        return;
+    for (int i = 0; i < 12; i++)
+        lcImage[i] = lc[i];
+    lcHave = true;
+
+    uint8_t par[3];
+    rs129Parity(lc, par);
+    bool header = rs129Match(lc, par, 0x96);
+    bool term = rs129Match(lc, par, 0x99);
+    bool plain = rs129Match(lc, par, 0x00);
+
+    LOG_D("dmr",
+          "lc %02x %02x %02x %02x %02x %02x %02x %02x %02x | %02x %02x %02x"
+          " rs %s 82=%02x 51=%02x",
+          lc[0], lc[1], lc[2], lc[3], lc[4], lc[5], lc[6], lc[7], lc[8], lc[9],
+          lc[10], lc[11],
+          header ? "header" : (term ? "term" : (plain ? "plain" : "bad")), r82,
+          r51);
+
+    uint8_t flco = lc[0] & 0x3F;
+    if ((header || plain) && ((flco == 0) || (flco == 3))) {
+        uint32_t dst = be24(&lc[3]);
+        uint32_t src = be24(&lc[6]);
+        bool changed = !callActive || (flco != callInfo.flco)
+                    || (dst != callInfo.dst) || (src != callInfo.src);
+        callInfo.flco = flco;
+        callInfo.dst = dst;
+        callInfo.src = src;
+        // TODO: filter on configured talkgroup / contact.
+        if (changed)
+            LOG_I("dmr", "call: flco %u src %lu dst %lu", flco,
+                  (unsigned long)src, (unsigned long)dst);
+        if (!callActive) {
+            callBursts = 0;
+            callDropped = 0;
+        }
+        callActive = true;
+        slotsSinceVoice = 0;
+    } else if (term && callActive) {
+        // The call ends unless voice follows within three slots.
+        if (slotsSinceVoice < 17)
+            slotsSinceVoice = 17;
+    }
+}
+
+/*
  * DMR_SYS_INT / SYS_INTER (PC3 -> EXTI3).  Register layout from the stock
  * handler (0x08038E58) and its frame dispatcher (0x08039410):
  *   0x82 = event flags, write-1-to-ack through 0x83; read first, as reading
@@ -247,8 +366,8 @@ static uint32_t be24(const uint8_t *p)
  *          [7:4] data type for data bursts (1 = voice LC header,
  *          2 = terminator with LC)
  *   0x5F = sync status
- * Link control is read from RX RAM address 0x00, 9 bytes: FLCO, FID, service
- * options, dst[3], src[3] (24 bit big-endian).
+ * Link control is in RX RAM from address 0x00: FLCO, FID, service options,
+ * dst[3], src[3] (24 bit big-endian), then 3 parity bytes.
  */
 static void handleSys()
 {
@@ -257,43 +376,7 @@ static void handleSys()
     uint8_t reg51 = C6000.readCfgRegister(0x51);
     (void)C6000.readCfgRegister(0x5F);
 
-    // Data bursts: 0x51 is not reliable on its own (it often reads as noise),
-    // but the link control it leads to carries the chip's own check, and a
-    // false header only re-reads the last LC.
-    bool dataOk = ((reg51 & 0x04) == 0) && ((reg51 & 0x03) == 2);
-    if (dataOk) {
-        uint8_t type = reg51 >> 4;
-        if (type == 1) // voice LC header
-        {
-            uint8_t lc[9];
-            C6000.readRxBurst(0x00, lc, sizeof(lc));
-            uint8_t flco = lc[0] & 0x3F;
-            uint32_t dst = be24(&lc[3]);
-            uint32_t src = be24(&lc[6]);
-            bool changed = !callActive || (flco != callInfo.flco)
-                        || (dst != callInfo.dst) || (src != callInfo.src);
-            callInfo.flco = flco;
-            callInfo.dst = dst;
-            callInfo.src = src;
-            // TODO: filter on configured talkgroup / contact.
-            if (changed)
-                LOG_I("dmr", "call start: flco %u src %lu dst %lu", flco,
-                      (unsigned long)src, (unsigned long)dst);
-            if (!callActive) {
-                callBursts = 0;
-                callDropped = 0;
-            }
-            callActive = true;
-            slotsSinceVoice = 0;
-        } else if ((type == 2) && callActive) // terminator with LC
-        {
-            // Many terminators read here are false (voice goes on right
-            // after them), so a terminator only shortens the timeout: the
-            // call ends unless voice follows within three slots.
-            if (slotsSinceVoice < 17)
-                slotsSinceVoice = 17;
-        }
-    }
+    pollLinkControl(flags, reg51);
 
     C6000.writeCfgRegister(0x83, flags);
 
@@ -342,11 +425,13 @@ void dmr_init()
     gpio_setMode(DMR_TX_INT, INPUT);
 
     golayInit();
+    gfInit();
     vspiInit();
 
     callActive = false;
     voicePathOn = false;
     haveLast = false;
+    lcHave = false;
     slotsSinceVoice = 0;
     vTail = vHead;
     dmrRunning = true;
