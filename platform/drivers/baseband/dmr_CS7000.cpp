@@ -324,18 +324,11 @@ static void handleSys()
             if (rxState != DmrRxState::VOICE_RX)
                 C6000.writeCfgRegister(0x22, 0x26); // stock: voice path start
 
-            // Variant 0: read the voice port now, at the burst event.
-            // Variant 1: read it at the next slot interrupt (the stock
-            // firmware reads it from a task woken later, and reading twice
-            // here gave different data about one burst in six).
+            // Read the voice port at the burst event (v27: reading at the next
+            // slot interrupt was no better).
             if (deferredRead)
                 pushVoice(true); // previous burst still pending
-            if (variant == 0)
-                pushVoice(false);
-            else {
-                vspiReadVoice(earlyRead);
-                deferredRead = true;
-            }
+            pushVoice(false);
 
             slotsSinceVoice = 0;
             rxState = DmrRxState::VOICE_RX;
