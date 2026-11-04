@@ -23,6 +23,21 @@ static ysfCallInfo_t callInfo;
 static volatile bool callActive = false;
 static uint32_t callFrames = 0;
 static uint32_t callDropped = 0;
+static uint32_t callBadFich = 0;   // Frames whose FICH did not decode
+static uint32_t callFlywheel = 0;  // Of those, decoded on the last FICH
+static uint32_t callLockLost = 0;  // Demodulator lock losses
+static uint32_t callRealignAt = 0; // Demodulator realign count at call start
+
+/*
+ * The destination of a call to everyone is ten asterisks ("**********"):
+ * shown as ALL.
+ */
+static void setDestination(const uint8_t *field, char out[11])
+{
+    callsignToString(field, out);
+    if (strcmp(out, "**********") == 0)
+        strcpy(out, "ALL");
+}
 
 bool ysf_getCallInfo(ysfCallInfo_t *out)
 {
@@ -41,6 +56,9 @@ OpMode_YSF::OpMode_YSF()
     , speakerPath(-1)
     , framesSinceGood(0)
     , idleTicks(0)
+    , unlockedTicks(0)
+    , lastDt(0)
+    , flywheel(0)
 {
 }
 
@@ -127,8 +145,20 @@ void OpMode_YSF::update(rtxStatus_t *const status, const bool newCfg)
                 processFrame(demod->getFrame());
         }
 
-        if (callActive && !demod->isLocked())
-            endCall("signal lost");
+        /*
+         * A call survives a short loss of lock (half a second): on air
+         * (2026-11-04) a hotspot relaying network traffic dropped the lock
+         * for under a frame now and then, and each time the call ended and
+         * restarted as a late entry.
+         */
+        if (callActive && !demod->isLocked()) {
+            if (unlockedTicks == 0)
+                callLockLost++;
+            if (++unlockedTicks >= 25)
+                endCall("signal lost");
+        } else {
+            unlockedTicks = 0;
+        }
     } else {
         sleepFor(0u, 30u);
     }
@@ -170,30 +200,71 @@ bool OpMode_YSF::rxSquelchOpen()
     return callActive;
 }
 
+void OpMode_YSF::startCall()
+{
+    callActive = true;
+    callFrames = 0;
+    callDropped = 0;
+    callBadFich = 0;
+    callFlywheel = 0;
+    callLockLost = 0;
+    callRealignAt = demod->realignCount();
+    unlockedTicks = 0;
+    flywheel = 0;
+    lastDt = 0;
+}
+
 void OpMode_YSF::endCall(const char *why)
 {
-    if (callActive)
+    if (callActive) {
         LOG_I("ysf",
               "call end (%s): %s > %s, %lu frames, %lu voice frames "
               "lost",
               why, callInfo.src, callInfo.dst, (unsigned long)callFrames,
               (unsigned long)callDropped);
+        LOG_I("ysf",
+              "  bad FICH %lu (%lu decoded on the last one), lock "
+              "lost %lu, realigned %lu",
+              (unsigned long)callBadFich, (unsigned long)callFlywheel,
+              (unsigned long)callLockLost,
+              (unsigned long)(demod->realignCount() - callRealignAt));
+    }
     callActive = false;
+    unlockedTicks = 0;
 }
 
 void OpMode_YSF::processFrame(const frame_t &frame)
 {
     Fich fich;
     if (decoder->decodeFich(frame, fich) == false) {
-        // A frame whose FICH does not decode is skipped; the call ends after
-        // 5 of them in a row (500 ms)
+        /*
+         * A frame whose FICH does not decode: during a voice call, with the
+         * frame well aligned (its sync word nearly intact), its voice is
+         * decoded as the last valid FICH said, for up to two frames in a row,
+         * since the AMBE FEC copes with the bit errors that broke the FICH
+         * (MMDVMHost likewise regenerates a bad FICH from the previous one).
+         * Otherwise the frame is skipped; the call ends after 5 of them in a
+         * row (500 ms).
+         */
         framesSinceGood++;
-        if (callActive && (framesSinceGood >= 5))
+        if (!callActive)
+            return;
+        callBadFich++;
+        bool aligned = (demod->lastSyncErrors() <= 2);
+        bool voice = (lastDt == DT_VD_MODE2) || (lastDt == DT_VD_MODE1);
+        if (aligned && voice && (flywheel < 2)) {
+            flywheel++;
+            callFlywheel++;
+            callFrames++;
+            pushVoice(frame, lastDt);
+        } else if (framesSinceGood >= 5) {
             endCall("no valid FICH");
+        }
         return;
     }
 
     framesSinceGood = 0;
+    flywheel = 0;
 
     switch (fich.fi()) {
         case FI_HEADER: {
@@ -201,14 +272,13 @@ void OpMode_YSF::processFrame(const frame_t &frame)
             bool ok = decoder->decodeCsd(frame, 1, csd);
             memset(&callInfo, 0, sizeof(callInfo));
             if (ok) {
-                callsignToString(&csd[0], callInfo.dst);
+                setDestination(&csd[0], callInfo.dst);
                 callsignToString(&csd[10], callInfo.src);
             }
             callInfo.dgid = fich.dgid();
             callInfo.dt = fich.dt();
-            callActive = true;
-            callFrames = 0;
-            callDropped = 0;
+            startCall();
+            lastDt = fich.dt();
             LOG_I("ysf", "call start: %s > %s, DG-ID %u, DT %u%s", callInfo.src,
                   callInfo.dst, callInfo.dgid, callInfo.dt,
                   ok ? "" : " (header CSD bad)");
@@ -228,9 +298,7 @@ void OpMode_YSF::processFrame(const frame_t &frame)
 
     if (!callActive) {
         memset(&callInfo, 0, sizeof(callInfo));
-        callActive = true;
-        callFrames = 0;
-        callDropped = 0;
+        startCall();
         LOG_I("ysf", "call start: late entry, DG-ID %u, DT %u", fich.dgid(),
               fich.dt());
     }
@@ -239,43 +307,46 @@ void OpMode_YSF::processFrame(const frame_t &frame)
     callInfo.dt = fich.dt();
     callFrames++;
 
-    uint8_t ambe[9];
+    lastDt = fich.dt();
     switch (fich.dt()) {
         case DT_VD_MODE2: {
             // Callsigns arrive in the data channel, one per frame number
             std::array<uint8_t, 10> dch;
             if (decoder->decodeVd2Dch(frame, dch)) {
                 if (fich.fn() == 0)
-                    callsignToString(dch.data(), callInfo.dst);
+                    setDestination(dch.data(), callInfo.dst);
                 else if (fich.fn() == 1)
                     callsignToString(dch.data(), callInfo.src);
             }
-
-            for (size_t n = 0; n < 5; n++) {
-                vd2VoiceToDmr(frame, n, ambe);
-                if (!dmrAudio_pushFrame(ambe))
-                    callDropped++;
-            }
+            pushVoice(frame, DT_VD_MODE2);
             break;
         }
 
         case DT_VD_MODE1: {
             std::array<uint8_t, 20> dch;
             if (decoder->decodeVd1Dch(frame, dch) && (fich.fn() == 0)) {
-                callsignToString(&dch[0], callInfo.dst);
+                setDestination(&dch[0], callInfo.dst);
                 callsignToString(&dch[10], callInfo.src);
             }
-
-            for (size_t n = 0; n < 5; n++) {
-                vd1VoiceToDmr(frame, n, ambe);
-                if (!dmrAudio_pushFrame(ambe))
-                    callDropped++;
-            }
+            pushVoice(frame, DT_VD_MODE1);
             break;
         }
 
         default:
             // Voice full rate (VW, IMBE) and data full rate: no voice here
             break;
+    }
+}
+
+void OpMode_YSF::pushVoice(const frame_t &frame, const uint8_t dt)
+{
+    uint8_t ambe[9];
+    for (size_t n = 0; n < 5; n++) {
+        if (dt == DT_VD_MODE2)
+            vd2VoiceToDmr(frame, n, ambe);
+        else
+            vd1VoiceToDmr(frame, n, ambe);
+        if (!dmrAudio_pushFrame(ambe))
+            callDropped++;
     }
 }

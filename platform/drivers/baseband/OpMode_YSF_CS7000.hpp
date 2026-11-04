@@ -43,6 +43,8 @@ private:
     void startRx();
     void stopRx();
     void processFrame(const YSF::frame_t &frame);
+    void startCall();
+    void pushVoice(const YSF::frame_t &frame, const uint8_t dt);
     void endCall(const char *why);
 
     bool enterRx;
@@ -53,6 +55,9 @@ private:
     pathId speakerPath;
     uint16_t framesSinceGood; ///< Frames since the last valid FICH
     uint8_t idleTicks;        ///< Updates since the call ended
+    uint8_t unlockedTicks;    ///< Updates without a lock during a call
+    uint8_t lastDt;           ///< Data type of the last valid FICH
+    uint8_t flywheel;         ///< Frames in a row decoded on lastDt
 
     std::unique_ptr<int16_t[]> basebandBuf;
     std::unique_ptr<YSF::Demodulator> demod;
