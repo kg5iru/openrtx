@@ -485,6 +485,16 @@ int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
             break;
         }
 
+        case DMR_RADIO_ID:
+            if(dmrTgTyping != NULL)
+                sniprintf(buf, max_len, "%s_", dmrTgTyping);
+            else if(last_state.settings.dmr_id == 0)
+                sniprintf(buf, max_len, "Not set");
+            else
+                sniprintf(buf, max_len, "%lu",
+                          (unsigned long) last_state.settings.dmr_id);
+            break;
+
         case DMR_TALKGROUP:
             if(dmrTgTyping != NULL)
                 sniprintf(buf, max_len, "%s_", dmrTgTyping);
@@ -507,7 +517,8 @@ void _ui_drawSettingsDMR(ui_state_t* ui_state)
               "DMR");
 
     bool typing = ui_state->edit_mode &&
-                  (ui_state->menu_selected == DMR_TALKGROUP);
+                  ((ui_state->menu_selected == DMR_TALKGROUP) ||
+                   (ui_state->menu_selected == DMR_RADIO_ID));
     dmrTgTyping = typing ? ui_state->new_dmr_tg : NULL;
     _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
                           _ui_getDMREntryName, _ui_getDMRValueName);

@@ -148,6 +148,11 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             }
             else
             {
+                // Transmit needs the own ID (Settings > DMR > Radio ID)
+                if(last_state.settings.dmr_id == 0)
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "No Radio ID");
+
                 // Idle: colour code, timeslot and talkgroup filters
                 uint8_t cc = settings_dmrColourCode(&last_state.settings);
                 uint8_t ts = settings_dmrTimeslot(&last_state.settings);

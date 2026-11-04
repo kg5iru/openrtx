@@ -185,7 +185,8 @@ const char *settings_dmr_items[] =
 {
     "Colour Code",
     "Timeslot",
-    "Talkgroup"
+    "Talkgroup",
+    "Radio ID"
 };
 #endif
 
@@ -2534,7 +2535,7 @@ void ui_updateFSM(bool *sync_rtx)
                             ui_state.edit_mode = false;
                         *sync_rtx = true;
                     }
-                    else // DMR_TALKGROUP: digits, 0 or empty = all
+                    else // DMR_TALKGROUP, DMR_RADIO_ID: digits, 0 or empty = none
                     {
                         size_t len = strnlen(ui_state.new_dmr_tg,
                                              sizeof(ui_state.new_dmr_tg));
@@ -2545,7 +2546,10 @@ void ui_updateFSM(bool *sync_rtx)
                                 tg = (tg * 10) + (ui_state.new_dmr_tg[i] - '0');
                             if(tg > 16777215)
                                 tg = 16777215;
-                            state.settings.dmr_rxTg = tg;
+                            if(ui_state.menu_selected == DMR_RADIO_ID)
+                                state.settings.dmr_id = tg;
+                            else
+                                state.settings.dmr_rxTg = tg;
                             ui_state.edit_mode = false;
                             *sync_rtx = true;
                         }
@@ -2571,7 +2575,8 @@ void ui_updateFSM(bool *sync_rtx)
                 else if(msg.keys & KEY_ENTER)
                 {
                     ui_state.edit_mode = true;
-                    if(ui_state.menu_selected == DMR_TALKGROUP)
+                    if((ui_state.menu_selected == DMR_TALKGROUP) ||
+                       (ui_state.menu_selected == DMR_RADIO_ID))
                         memset(ui_state.new_dmr_tg, 0,
                                sizeof(ui_state.new_dmr_tg));
                 }
