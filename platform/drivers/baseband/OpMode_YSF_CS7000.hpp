@@ -52,6 +52,7 @@ private:
     streamId basebandId;
     pathId speakerPath;
     uint16_t framesSinceGood; ///< Frames since the last valid FICH
+    uint8_t idleTicks;        ///< Updates since the call ended
 
     std::unique_ptr<int16_t[]> basebandBuf;
     std::unique_ptr<YSF::Demodulator> demod;

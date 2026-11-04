@@ -40,6 +40,7 @@ OpMode_YSF::OpMode_YSF()
     , basebandId(-1)
     , speakerPath(-1)
     , framesSinceGood(0)
+    , idleTicks(0)
 {
 }
 
@@ -93,16 +94,7 @@ void OpMode_YSF::startRx()
     framesSinceGood = 0;
     rxOn = true;
 
-    // Speaker path for the lifetime of the mode; the audio thread plays
-    // silence between calls (as in DMR mode)
-    speakerPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
-    if ((speakerPath > 0) && dmrAudio_start(speakerPath))
-        audioOn = true;
-    else if (speakerPath > 0)
-        audioPath_release(speakerPath);
-
-    LOG_I("ysf", "receive started, baseband stream %d, audio %d", basebandId,
-          audioOn ? 1 : 0);
+    LOG_I("ysf", "receive started, baseband stream %d", basebandId);
 }
 
 void OpMode_YSF::stopRx()
@@ -139,6 +131,30 @@ void OpMode_YSF::update(rtxStatus_t *const status, const bool newCfg)
             endCall("signal lost");
     } else {
         sleepFor(0u, 30u);
+    }
+
+    /*
+     * Squelch: the speaker path (and the audio amplifier) is open only during
+     * a call and while its last frames play out, so that the amplifier does
+     * not hiss between calls.
+     */
+    bool active = callActive || (dmrAudio_queued() > 0);
+    if (active)
+        idleTicks = 0;
+    else if (idleTicks < 255)
+        idleTicks++;
+
+    if (active && !audioOn) {
+        speakerPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
+        if ((speakerPath > 0) && dmrAudio_start(speakerPath))
+            audioOn = true;
+        else if (speakerPath > 0)
+            audioPath_release(speakerPath);
+    } else if (!active && audioOn && (idleTicks >= 15)) {
+        // 300 ms after the call (updates are 20 ms apart while receiving)
+        dmrAudio_stop();
+        audioPath_release(speakerPath);
+        audioOn = false;
     }
 
     // Transmit is not implemented: PTT is ignored.

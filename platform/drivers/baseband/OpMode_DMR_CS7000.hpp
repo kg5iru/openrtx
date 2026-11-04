@@ -36,6 +36,7 @@ private:
     bool enterRx;
     bool audioOn;
     pathId rxAudioPath;
+    uint8_t idleTicks; ///< Updates (30 ms) since the call ended
 };
 
 #endif /* OPMODE_DMR_CS7000_H */

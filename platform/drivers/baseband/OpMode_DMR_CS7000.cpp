@@ -12,7 +12,8 @@
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "OpMode_DMR_CS7000.hpp"
 
-OpMode_DMR::OpMode_DMR() : enterRx(true), audioOn(false), rxAudioPath(-1)
+OpMode_DMR::OpMode_DMR()
+    : enterRx(true), audioOn(false), rxAudioPath(-1), idleTicks(0)
 {
 }
 
@@ -53,14 +54,30 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         radio_enableRx();
         status->opStatus = RX;
         enterRx = false;
+    }
 
-        // Open the speaker path for the lifetime of the mode; the audio
-        // thread plays silence between calls.
+    /*
+     * Squelch: the speaker path (and with it the audio amplifier) is open
+     * only during a call and while its last frames play out.  Up to v34 it
+     * stayed open for the whole mode and the amplifier hissed between calls.
+     */
+    bool active = rxSquelchOpen() || (dmrAudio_queued() > 0);
+    if (active)
+        idleTicks = 0;
+    else if (idleTicks < 255)
+        idleTicks++;
+
+    if (active && !audioOn) {
         rxAudioPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
         if ((rxAudioPath > 0) && dmrAudio_start(rxAudioPath))
             audioOn = true;
         else if (rxAudioPath > 0)
             audioPath_release(rxAudioPath);
+    } else if (!active && audioOn && (idleTicks >= 10)) {
+        // 300 ms after the call: the jitter buffer has played out
+        dmrAudio_stop();
+        audioPath_release(rxAudioPath);
+        audioOn = false;
     }
 
     // Transmit is not implemented: ignore PTT.
