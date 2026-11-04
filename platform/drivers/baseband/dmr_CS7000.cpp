@@ -415,8 +415,9 @@ static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
 static volatile uint8_t txState = TX_OFF;
 static volatile bool txStopReq = false;
 static uint8_t txLc[9];
-static bool txArmSlot = false; // this slot interrupt arms a burst
-static bool txFirst = false;   // reg 0x40 not yet switched to transmit
+static bool txArmSlot = false;    // this slot interrupt arms a burst
+static bool txFirst = false;      // reg 0x40 not yet switched to transmit
+static bool txVoiceReady = false; // voice for the next burst written already
 // Slot interrupts while receiving, since the last TX start: tells whether
 // the chip's slot timer was running when the PTT was pressed
 static volatile uint32_t rxSlotIrqs = 0;
@@ -441,6 +442,26 @@ static void txSendTerminator()
     txState = TX_END;
 }
 
+// Take the next 3 encoded frames (silence if none) and write them to V_SPI
+static void loadVoice()
+{
+    uint8_t voice[27];
+    for (int i = 0; i < 3; i++) {
+        if (!dmrAudio_popTxFrame(&voice[9 * i])) {
+            for (int k = 0; k < 9; k++)
+                voice[(9 * i) + k] = ambeSilence[k];
+            txUnderruns++;
+        }
+    }
+
+    if (txBursts < 2) {
+        for (int i = 0; i < 27; i++)
+            txFirstBursts[txBursts][i] = voice[i];
+    }
+
+    vspiWriteVoice(voice);
+}
+
 static void handleTxSlot()
 {
     txArmSlot = !txArmSlot;
@@ -459,6 +480,19 @@ static void handleTxSlot()
     }
 
     if (!txArmSlot) {
+        /*
+         * The voice of the next burst is written here, half a frame ahead.
+         * v42 wrote it in the arming slot, right after 0x41 = 0x80, and an
+         * off-air capture (RSP1A, 2026-11-04) showed the chip sending the
+         * same 27 bytes for 1 to 20 bursts in a row, and zeros for the first
+         * three: most writes were not taken.  The stock code writes them
+         * from its encoder task, at no fixed point of the slot.
+         */
+        if ((txState == TX_VOICE) && !txStopReq) {
+            loadVoice();
+            txVoiceReady = true;
+        }
+
         if (txState == TX_END) {
             // The slot after the terminator: the stock end of transmission
             dmrDiag_set(DIAG_STAGE, STAGE_END);
@@ -492,22 +526,12 @@ static void handleTxSlot()
                 break;
             }
 
-            uint8_t voice[27];
-            for (int i = 0; i < 3; i++) {
-                if (!dmrAudio_popTxFrame(&voice[9 * i])) {
-                    for (int k = 0; k < 9; k++)
-                        voice[(9 * i) + k] = ambeSilence[k];
-                    txUnderruns++;
-                }
-            }
+            if (!txVoiceReady)
+                loadVoice();
+            txVoiceReady = false;
 
-            if (txBursts < 2) {
-                for (int i = 0; i < 27; i++)
-                    txFirstBursts[txBursts][i] = voice[i];
-            }
             dmrDiag_set(DIAG_STAGE, STAGE_VOICE);
             C6000.writeCfgRegister(0x41, 0x80);
-            vspiWriteVoice(voice);
             C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
             C6000.writeCfgRegister(0x50, (uint8_t)((txVoiceN << 4) | 0x08));
             txVoiceN = (txVoiceN + 1) % 6;
@@ -839,6 +863,17 @@ void dmr_startTx(uint32_t src, uint32_t dst)
     txTxIrqs = 0;
 
     txFirst = true;
+    txVoiceReady = false;
+
+    /*
+     * Reg 0x11 bit 0.  The stock DMR channel load ends with 0x11 = 0x81
+     * (0x0804B72E), and the stock code switches between 0x80 and 0x81 as
+     * the receiver locks.  OpenRTX kept 0x80, and v40..v42 on air only
+     * transmitted when the receiver had locked on a call shortly before:
+     * otherwise the slot interrupt never came.  Bit 0 is taken to let the
+     * chip run its slot timing on its own.
+     */
+    C6000.writeCfgRegister(0x11, 0x81);
 
     LOG_I("dmr",
           "tx start: src %lu dst %lu, %lu slot interrupts since the "
@@ -897,6 +932,7 @@ void dmr_endTx(uint32_t elapsedMs)
     txState = TX_OFF;
 
     // Receive again, with the steps dmrMode() starts reception with
+    C6000.writeCfgRegister(0x11, 0x80);
     C6000.writeCfgRegister(0x41, 0x00);
     C6000.writeCfgRegister(0x40, 0x03);
     C6000.writeCfgRegister(0x41, 0x20);
