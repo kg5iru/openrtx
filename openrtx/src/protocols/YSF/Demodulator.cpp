@@ -67,6 +67,8 @@ void Demodulator::reset()
     missedSyncs = 0;
     framesInLock = 0;
     syncErrors = 0;
+    realigning = false;
+    realigns = 0;
     initCount = RX_SAMPLE_RATE / 50; // 20 ms for the filters
     corrThreshold = 0.0f;
     frames[0].fill(0);
@@ -88,7 +90,8 @@ const frame_t &Demodulator::getFrame()
 
 bool Demodulator::isLocked() const
 {
-    return (state == State::LOCKED) || (state == State::SYNC_UPDATE);
+    return (state == State::LOCKED) || (state == State::SYNC_UPDATE)
+        || ((state == State::SYNCED) && realigning);
 }
 
 bool Demodulator::sample(const int16_t rawSample)
@@ -168,9 +171,10 @@ void Demodulator::syncedState()
     for (size_t i = 0; (i < SYNC_SAMPLES) && (n < SYNC_SYMBOLS); i++) {
         size_t pos = (correlator.index() + i) % SYNC_SAMPLES;
         if ((pos % SAMPLES_PER_SYMBOL) == samplingPoint) {
-            // Samples taken before the polarity decision are not flipped
+            // Samples taken before the polarity decision are not flipped;
+            // on a realignment the decision is older than the sync word.
             int16_t v = data[pos];
-            syms[n++] = inverted ? -v : v;
+            syms[n++] = (inverted && !realigning) ? -v : v;
         }
     }
 
@@ -189,8 +193,7 @@ void Demodulator::syncedState()
 
     if ((n < SYNC_SYMBOLS) || (np == 0) || (nn == 0) || (pos <= 0)
         || (neg >= 0)) {
-        state = State::UNLOCKED;
-        inverted = false;
+        syncFailed();
         return;
     }
 
@@ -205,15 +208,18 @@ void Demodulator::syncedState()
     if (errs <= SYNC_ERRORS_ACQ) {
         state = State::LOCKED;
         missedSyncs = 0;
-        framesInLock = 0;
+        if (realigning)
+            realigns += 1; // a verified lock stays one
+        else
+            framesInLock = 0;
         syncErrors = errs;
         mu = 0.0f;
         skipNext = false;
         prevValue = 0.0f;
         prevSymbol = 0;
+        realigning = false;
     } else {
-        state = State::UNLOCKED;
-        inverted = false;
+        syncFailed();
     }
 
     /*
@@ -222,6 +228,28 @@ void Demodulator::syncedState()
      * with sampleIndex.  After a polarity change it holds samples of both
      * signs for one sync word length, which only delays a new acquisition.
      */
+}
+
+void Demodulator::syncFailed()
+{
+    if (realigning) {
+        // Not a sync word after all: back to the lock as it was
+        frames[demodIdx] = held.frame;
+        frameIndex = held.frameIndex;
+        samplingPoint = held.samplingPoint;
+        missedSyncs = held.missedSyncs;
+        mu = held.mu;
+        skipNext = held.skipNext;
+        prevValue = held.prevValue;
+        prevSymbol = held.prevSymbol;
+        devEstimator = held.devEstimator;
+        realigning = false;
+        state = State::LOCKED;
+        return;
+    }
+
+    state = State::UNLOCKED;
+    inverted = false;
 }
 
 int8_t Demodulator::quantize(const int16_t sample)
@@ -246,6 +274,39 @@ int8_t Demodulator::quantize(const int16_t sample)
 void Demodulator::lockedState(const int16_t sample)
 {
     (void)sample;
+
+    /*
+     * Look for the sync word elsewhere too.  A transmitter that restarts its
+     * frame timing (a hotspot whose network stream ran dry for a moment,
+     * 2026-11-04 on air) moves the frame boundary: the lock would otherwise
+     * read misaligned frames until MAX_MISSED syncs were missed (400 ms of
+     * voice) and then search from scratch.  The sync word of the current
+     * frame, just behind us, is ignored; another one is verified as at
+     * acquisition and, if it holds, the lock moves there, dropping the frame
+     * being filled.  The polarity is already corrected: only a positive
+     * peak is a sync word.
+     */
+    int32_t thresh = static_cast<int32_t>(corrThreshold * 58.0f);
+    if (sync.update(correlator, thresh, -thresh) > 0) {
+        size_t idx = frameIndex;
+        bool current = ((idx + 3) >= SYNC_SYMBOLS)
+                    && (idx <= (SYNC_SYMBOLS + 3));
+        if (!current) {
+            held.frame = frames[demodIdx];
+            held.frameIndex = frameIndex;
+            held.samplingPoint = samplingPoint;
+            held.missedSyncs = missedSyncs;
+            held.mu = mu;
+            held.skipNext = skipNext;
+            held.prevValue = prevValue;
+            held.prevSymbol = prevSymbol;
+            held.devEstimator = devEstimator;
+            samplingPoint = sync.samplingIndex();
+            realigning = true;
+            state = State::SYNCED;
+            return;
+        }
+    }
 
     // Symbols are taken two samples after their base sampling point, from
     // the four samples around it (see trackTiming)

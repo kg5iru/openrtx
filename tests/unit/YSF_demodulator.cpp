@@ -131,6 +131,7 @@ struct RxResult {
     size_t bitErrors; ///< Over the matched frames
     size_t bits;
     size_t spurious;  ///< Frames matching none (after the signal ends)
+    uint32_t realigns;
 };
 
 // Match each demodulated frame against the transmitted one with the same
@@ -138,7 +139,7 @@ struct RxResult {
 static RxResult receive(const Transmission &tx)
 {
     Demodulator demod;
-    RxResult r = { 0, 0, 0, 0, 0 };
+    RxResult r = { 0, 0, 0, 0, 0, 0 };
 
     for (auto s : tx.samples) {
         if (demod.sample(s) == false)
@@ -166,6 +167,7 @@ static RxResult receive(const Transmission &tx)
         r.bits += FRAME_BYTES * 8;
     }
 
+    r.realigns = demod.realignCount();
     return r;
 }
 
@@ -177,6 +179,7 @@ TEST_CASE("YSF demodulator: clean signal, every frame bit-exact", "[ysf]")
     REQUIRE(r.frames >= 19);
     REQUIRE(r.exact == r.frames);
     REQUIRE(r.spurious <= 4);
+    REQUIRE(r.realigns == 0);
 }
 
 TEST_CASE("YSF demodulator: inverted signal", "[ysf]")
@@ -237,8 +240,58 @@ TEST_CASE("YSF demodulator: bit error rate in noise", "[ysf]")
         auto r = receive(tx);
         double ber = (r.bits > 0) ? double(r.bitErrors) / r.bits : 1.0;
         INFO("noise " << levels[i] << ": frames " << r.frames << ", exact "
-                      << r.exact << ", BER " << ber);
+                      << r.exact << ", BER " << ber << ", realigns "
+                      << r.realigns);
         CHECK(r.frames >= 38);
         CHECK(ber <= maxBer[i]);
+        CHECK(r.realigns == 0); // no false sync words found in the data
     }
+}
+
+TEST_CASE("YSF demodulator: realigns at once when the frame timing jumps",
+          "[ysf]")
+{
+    /*
+     * A hotspot whose network stream runs dry restarts its frames: model it
+     * by cutting 1234 samples (about half a frame) out of the middle of
+     * frame 10.  Frame 10 is lost; without realignment the lock would read
+     * misaligned frames until MAX_MISSED syncs were missed and lose about
+     * five more.
+     */
+    std::mt19937 rng(30);
+    auto tx = transmit(20, rng);
+    size_t cut = 4800 + (10 * FRAME_SYMBOLS * 5) + 1000;
+    tx.samples.erase(tx.samples.begin() + cut, tx.samples.begin() + cut + 1234);
+
+    Demodulator demod;
+    size_t frames = 0, exact = 0;
+    bool unlocked = false, wasLocked = false;
+    for (auto s : tx.samples) {
+        bool ready = demod.sample(s);
+        if (demod.isLocked())
+            wasLocked = true;
+        else if (wasLocked && (frames < 18))
+            unlocked = true;
+        if (!ready)
+            continue;
+        const frame_t &f = demod.getFrame();
+        size_t best = 9999;
+        for (const auto &t : tx.frames) {
+            size_t e = 0;
+            for (size_t i = 0; i < FRAME_BYTES; i++)
+                e += __builtin_popcount(f[i] ^ t[i]);
+            if (e < best)
+                best = e;
+        }
+        if (best < (FRAME_BYTES * 8) / 4)
+            frames++;
+        if (best == 0)
+            exact++;
+    }
+
+    INFO("frames " << frames << ", exact " << exact << ", realigns "
+                   << demod.realignCount());
+    REQUIRE(demod.realignCount() >= 1);
+    REQUIRE(exact >= 18);
+    REQUIRE_FALSE(unlocked);
 }

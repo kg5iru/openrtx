@@ -39,8 +39,9 @@ namespace YSF
  * Output: whole 120-byte frames, sync word included, aligned on the sync.
  * The lock is held while the sync word recurs every 480 symbols with at most
  * SYNC_ERRORS bit errors, and dropped after MAX_MISSED syncs missed in a row
- * (the first one, for a lock just acquired).  Checking that the contents make
- * sense (FICH CRC) is up to the caller.
+ * (the first one, for a lock just acquired).  While locked, a sync word
+ * found at another position moves the lock there at once.  Checking that the
+ * contents make sense (FICH CRC) is up to the caller.
  */
 class Demodulator
 {
@@ -94,6 +95,15 @@ public:
         return syncErrors;
     }
 
+    /**
+     * @return how many times a lock moved to a sync word found at another
+     * position (see lockedState), since the last reset().
+     */
+    uint32_t realignCount() const
+    {
+        return realigns;
+    }
+
     static constexpr size_t RX_SAMPLE_RATE = 24000;
     static constexpr size_t SAMPLES_PER_SYMBOL = RX_SAMPLE_RATE / SYMBOL_RATE;
     static constexpr uint8_t SYNC_ERRORS_ACQ = 2; ///< To acquire a lock
@@ -108,6 +118,7 @@ private:
     void syncedState();
     void lockedState(const int16_t sample);
     void syncUpdateState();
+    void syncFailed();
     void trackTiming(const int16_t value, const int8_t symbol);
     int16_t interpolate() const;
     int8_t quantize(const int16_t sample);
@@ -133,6 +144,21 @@ private:
     uint8_t missedSyncs;
     uint8_t framesInLock; ///< Frames completed since the lock
     uint8_t syncErrors;
+    bool realigning;      ///< SYNCED entered from a lock, not from UNLOCKED
+    uint32_t realigns;
+    /// The lock as it was before a realignment attempt, restored if the
+    /// sync word found does not verify
+    struct {
+        frame_t frame;
+        uint16_t frameIndex;
+        uint32_t samplingPoint;
+        uint8_t missedSyncs;
+        float mu;
+        bool skipNext;
+        float prevValue;
+        int8_t prevSymbol;
+        DevEstimator devEstimator;
+    } held;
     uint32_t initCount;
     float corrThreshold;
     struct dcBlock dcBlock;
