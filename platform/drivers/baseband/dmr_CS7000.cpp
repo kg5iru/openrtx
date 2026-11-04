@@ -31,6 +31,7 @@
 #include "hwconfig.h"
 #include "drivers/baseband/HR_C6000.h"
 #include "drivers/baseband/dmr_CS7000.h"
+#include "drivers/baseband/dmr_audio_CS7000.h"
 #include "core/log.h"
 #include "peripherals/spi.h"
 #include "drivers/SPI/spi_stm32.h"
@@ -142,13 +143,7 @@ static volatile bool callActive = false;
 static volatile bool dmrRunning = false;
 static uint8_t slotsSinceVoice = 0;
 
-// Voice bursts waiting for the audio thread.
-static constexpr uint8_t VOICE_FIFO = 8;
-static uint8_t voiceFifo[VOICE_FIFO][27];
-static volatile uint8_t vHead = 0; // written by the interrupts
-static volatile uint8_t vTail = 0; // written by the audio thread
-
-static bool termSeen = false;      // terminator read since the last voice burst
+static bool termSeen = false; // terminator read since the last voice burst
 static uint8_t lastVoice[27];
 static bool haveLast = false;
 static bool voicePathOn = false;
@@ -176,7 +171,7 @@ static uint8_t last57 = 0;
 static void endCall(const char *why)
 {
     if (callActive)
-        LOG_I("dmr", "call end (%s): %lu bursts, %lu lost", why,
+        LOG_I("dmr", "call end (%s): %lu bursts, %lu frames lost", why,
               (unsigned long)callBursts, (unsigned long)callDropped);
     // The voice FIFO is left to drain: the last bursts of the call are still
     // waiting to be played.
@@ -259,14 +254,10 @@ static void pollVoicePort()
         return;
     }
 
-    uint8_t nh = (vHead + 1) % VOICE_FIFO;
-    if (nh == vTail) {
-        vTail = (vTail + 1) % VOICE_FIFO; // full: drop the oldest
-        callDropped++;
-    }
-    for (int i = 0; i < 27; i++)
-        voiceFifo[vHead][i] = buf[i];
-    vHead = nh;
+    // The three AMBE+2 frames go to the playback queue (dmr_audio_CS7000)
+    for (int i = 0; i < 3; i++)
+        if (!dmrAudio_pushFrame(&buf[9 * i]))
+            callDropped++;
     callBursts++;
 
     if (!voicePathOn) {
@@ -499,7 +490,6 @@ void dmr_init()
     haveLast = false;
     lcHave = false;
     slotsSinceVoice = 0;
-    vTail = vHead;
     dmrRunning = true;
 
     // HR_C6000 interrupts are active-low pulses (manual, section 5.1):
@@ -539,22 +529,6 @@ void dmr_terminate()
 
     EXTI->IMR1 &= ~(EXTI_IMR1_IM0 | EXTI_IMR1_IM2 | EXTI_IMR1_IM3);
     callActive = false;
-}
-
-bool dmr_popVoiceBurst(uint8_t out[27])
-{
-    if (vTail == vHead)
-        return false;
-    uint8_t t = vTail;
-    for (int i = 0; i < 27; i++)
-        out[i] = voiceFifo[t][i];
-    vTail = (t + 1) % VOICE_FIFO;
-    return true;
-}
-
-unsigned dmr_voiceQueued()
-{
-    return (unsigned)((vHead + VOICE_FIFO - vTail) % VOICE_FIFO);
 }
 
 void dmr_setRxTalkgroup(uint32_t tg)

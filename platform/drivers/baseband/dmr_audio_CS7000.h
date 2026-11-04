@@ -16,9 +16,10 @@ extern "C" {
 #endif
 
 /**
- * Start the DMR receive audio thread.  It takes the voice bursts collected by
- * dmr_CS7000.cpp, runs them through the extracted AMBE+2 decoder and plays the
- * result on the given (already requested) MCU -> speaker audio path.
+ * Start the AMBE+2 receive audio thread (DMR and YSF).  It takes the voice
+ * frames queued with dmrAudio_pushFrame(), runs them through the AMBE+2
+ * decoder and plays the result on the given (already requested) MCU ->
+ * speaker audio path.
  * Requires CS7000_AMBE and the codec blob (see platform/drivers/vocoder).
  *
  * @return true if the thread was started.
@@ -27,6 +28,17 @@ bool dmrAudio_start(const pathId path);
 
 /** Stop the thread and wait for it to terminate. */
 void dmrAudio_stop();
+
+/**
+ * Queue one received AMBE+2 frame (9 bytes, 72 bits in DMR layout) for
+ * playback.  Single producer: callable from an interrupt.
+ *
+ * @return false if the queue was full and the frame was dropped.
+ */
+bool dmrAudio_pushFrame(const uint8_t frame[9]);
+
+/** Number of frames waiting to be played. */
+unsigned dmrAudio_queued();
 
 #define DMR_CODEC_OK 0      ///< codec region present and intact
 #define DMR_CODEC_MISSING 1 ///< built without the codec, or region erased

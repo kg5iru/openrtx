@@ -24,6 +24,42 @@
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "core/log.h"
 
+/*
+ * Received AMBE+2 frames waiting to be played, 9 bytes each in DMR layout.
+ * Single producer (the DMR interrupt, or the YSF mode's thread; only one mode
+ * runs at a time), single consumer (the decode thread).
+ */
+static constexpr unsigned QUEUE_FRAMES = 32;
+static uint8_t frameQueue[QUEUE_FRAMES][9];
+static volatile unsigned qHead = 0; // written by the producer
+static volatile unsigned qTail = 0; // written by the decode thread
+
+bool dmrAudio_pushFrame(const uint8_t frame[9])
+{
+    unsigned next = (qHead + 1) % QUEUE_FRAMES;
+    if (next == qTail)
+        return false;
+    for (int i = 0; i < 9; i++)
+        frameQueue[qHead][i] = frame[i];
+    qHead = next;
+    return true;
+}
+
+unsigned dmrAudio_queued()
+{
+    return (qHead + QUEUE_FRAMES - qTail) % QUEUE_FRAMES;
+}
+
+static bool popFrame(uint8_t frame[9])
+{
+    if (qTail == qHead)
+        return false;
+    for (int i = 0; i < 9; i++)
+        frame[i] = frameQueue[qTail][i];
+    qTail = (qTail + 1) % QUEUE_FRAMES;
+    return true;
+}
+
 #ifdef CS7000_AMBE
 
 #include "ambe_cs7000.h"
@@ -64,9 +100,9 @@ static void *decodeThread(void *arg)
     // on the radio (a crash with no DMR traffic is not the codec).
     bool codecReady = false;
     bool playing = false;
+    uint8_t sinceFrame = 255; // 20 ms buffers since the last frame played
 
-    uint8_t frames[27];
-    uint8_t next = 3; // index of the next frame to decode, 3 = none left
+    uint8_t frame[9];
 
     // Avoid writing to the buffer while the stream is reading it.
     outputStream_sync(oStream, false);
@@ -75,39 +111,37 @@ static void *decodeThread(void *arg)
         if (audioPath_getStatus(outPath) != PATH_OPEN)
             break;
 
-        // Jitter buffer: start (or restart after running dry) only once two
-        // bursts are queued, so that slot timing jitter does not insert
-        // silence between bursts.
-        if (next >= 3) {
-            if (!playing && dmr_voiceQueued() >= 2)
-                playing = true;
-            if (playing && dmr_popVoiceBurst(frames))
-                next = 0;
-            else
-                playing = false;
-        }
+        // Jitter buffer: start (or restart after running dry) only once six
+        // frames (120 ms: two DMR bursts, more than one YSF frame) are
+        // queued, so that the bursty arrival does not insert silence.
+        if (!playing && dmrAudio_queued() >= 6)
+            playing = true;
+        bool have = playing && popFrame(frame);
+        if (playing && !have)
+            playing = false;
 
         stream_sample_t *buf = outputStream_getIdleBuffer(oStream);
         if (buf == NULL)
             break;
 
-        if (next < 3 && !codecReady) {
+        if (have && !codecReady) {
             ambe_cs7000_init(&decoder);
             codecReady = true;
         }
 
-        if (next < 3) {
-            int e = ambe_cs7000_decode(
-                &decoder, &frames[next * AMBE_CS7000_FRAME_BYTES], buf);
+        if (have) {
+            int e = ambe_cs7000_decode(&decoder, frame, buf);
             errTotal += (unsigned)e;
             if (e >= 4)
                 badFrames++;
             framesDecoded++;
-            next += 1;
+            sinceFrame = 0;
         } else {
-            dmrCallInfo_t ci;
-            if (dmr_getCallInfo(&ci))
-                gaps++; // call active but no burst queued
+            // Ran dry within 300 ms of the last frame: a gap in the audio
+            if ((sinceFrame > 0) && (sinceFrame < 15))
+                gaps++;
+            if (sinceFrame < 255)
+                sinceFrame++;
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
         }
 

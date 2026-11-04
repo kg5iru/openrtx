@@ -37,12 +37,6 @@ typedef struct {
 /** Returns false when no call is being received. */
 bool dmr_getCallInfo(dmrCallInfo_t *out);
 
-/** Pop the last received voice burst (27 bytes = 3 AMBE+2 frames). */
-bool dmr_popVoiceBurst(uint8_t out[27]);
-
-/** Number of voice bursts waiting to be played. */
-unsigned dmr_voiceQueued();
-
 /**
  * Talkgroup to receive: group calls to other talkgroups are muted and not
  * shown.  0 receives every call.  Private calls are always received.
