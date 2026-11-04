@@ -8,7 +8,7 @@ name: "CS7000-PLUS DMR"
 on:
   workflow_dispatch:
   push:
-    branches: [ "cs7000p-dmr" ]
+    branches: [ "cs7000p-dmr", "cs7000p-ysf" ]
 
 # The build environment (devcontainer image with the Miosix GCC toolchain,
 # compiled from source) takes about 25 minutes to build, the firmware itself
