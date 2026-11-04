@@ -55,6 +55,7 @@ typedef struct
     uint8_t dmr_cc;               // DMR colour code + 1, 0 = not set (1)
     uint32_t dmr_rxTg;            // DMR talkgroup to receive, 0 = all
     uint8_t dmr_ts;               // DMR timeslot to receive, 0 = any, 1 or 2
+    uint32_t dmr_id;              // Own DMR radio ID, 0 = not set (no TX)
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -88,6 +89,7 @@ static const settings_t default_settings =
     0,                            // DMR colour code not set (1)
     0,                            // Receive all DMR talkgroups
     0,                            // Receive either DMR timeslot
+    0,                            // DMR radio ID not set
 #endif
 };
 
