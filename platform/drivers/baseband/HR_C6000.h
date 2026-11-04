@@ -141,6 +141,25 @@ public:
         spi_receive(uSpi, data, len);
     }
 
+    /**
+     * Load the payload of the next burst to transmit the way the stock CS7000
+     * firmware does (fn 0x0802CC34): a two byte command (DATA mode, 8-bit
+     * address) followed by the data.  The stock code writes a 9 byte link
+     * control at address 0 before a voice header, a terminator, and the voice
+     * bursts that carry embedded signalling.
+     */
+    inline void writeTxBurst(const uint8_t addr, const uint8_t *data,
+                             const size_t len)
+    {
+        uint8_t cmd[2];
+        cmd[0] = static_cast< uint8_t >(C6000_SpiOpModes::DATA);
+        cmd[1] = addr;
+
+        ScopedChipSelect cs(uSpi, uCs);
+        spi_send(uSpi, cmd, 2);
+        spi_send(uSpi, data, len);
+    }
+
 private:
 
     /**

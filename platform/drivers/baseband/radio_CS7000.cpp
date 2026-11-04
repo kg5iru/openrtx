@@ -38,6 +38,7 @@ static uint8_t txpwr_hi  = 0;                  // APC voltage for TX output powe
 static struct rssiParams rssi;                 // RSSI curve parameters
 
 static enum opstatus radioStatus;               // Current operating status
+static bool analogTx = false;                   // HR_C6000 analog TX started
 #ifdef CONFIG_DMR_CS7000
 static uint8_t dmrSlotMode = 0;                 // HR_C6000 reg 0x10 as last written
 #endif
@@ -399,10 +400,16 @@ void radio_enableTx()
             C6000.startAnalogTx(TxAudioSource::LINE_IN, FmConfig::BW_25kHz);
             break;
 
+        case OPMODE_DMR:
+            // The HR_C6000 sends the DMR bursts itself: dmr_CS7000.cpp drives
+            // it once the RF chain is keyed.
+            break;
+
         default:
             break;
     }
 
+    analogTx = (config->opMode == OPMODE_FM) || (config->opMode == OPMODE_M17);
     gpioDev_set(TX_PWR_EN);     // Enable TX PA
 
     radioStatus = TX;
@@ -413,8 +420,11 @@ void radio_disableRtx()
     gpioDev_clear(TX_PWR_EN);   // Disable TX PA
     gpioDev_clear(RX_PWR_EN);   // Disable RX LNA
 
-    if(radioStatus == TX)
-        C6000.stopAnalogTx();   // Stop HR_C6000 Tx
+    // Stop HR_C6000 analog Tx.  Not after DMR: stopAnalogTx() rewrites
+    // reg 0x34 with the FM value, and DMR needs its own (see dmrMode()).
+    if((radioStatus == TX) && analogTx)
+        C6000.stopAnalogTx();
+    analogTx = false;
 
     // Shut down CTCSS ADC sampling and reset tone detector
     if(ctcssCtx.running)

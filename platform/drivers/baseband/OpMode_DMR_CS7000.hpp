@@ -33,10 +33,18 @@ public:
     virtual bool rxSquelchOpen() override;
 
 private:
+    void stopRxAudio();
+    void startTx(rtxStatus_t *const status);
+    void finishTx(rtxStatus_t *const status);
+
     bool enterRx;
     bool audioOn;
     pathId rxAudioPath;
     uint8_t idleTicks; ///< Updates (30 ms) since the call ended
+    bool transmitting;
+    bool pttHeld;      ///< PTT pressed and already acted on
+    uint16_t txTicks;  ///< Updates (30 ms) since the transmission started
+    long long txStart; ///< getTick() at the start of the transmission
 };
 
 #endif /* OPMODE_DMR_CS7000_H */

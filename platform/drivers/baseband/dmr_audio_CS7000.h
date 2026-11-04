@@ -40,6 +40,22 @@ bool dmrAudio_pushFrame(const uint8_t frame[9]);
 /** Number of frames waiting to be played. */
 unsigned dmrAudio_queued();
 
+/**
+ * Start the transmit encoder: AMBE+2 frames are produced into a queue that
+ * the DMR driver empties, 3 frames per voice burst.  Returns false when the
+ * codec is not available.
+ */
+bool dmrAudio_startTx();
+
+/** Stop the transmit encoder. */
+void dmrAudio_stopTx();
+
+/**
+ * Take the next encoded frame (9 bytes, DMR layout) for transmission; false
+ * when none is ready.  Called from the DMR slot interrupt.
+ */
+bool dmrAudio_popTxFrame(uint8_t frame[9]);
+
 #define DMR_CODEC_OK 0      ///< codec region present and intact
 #define DMR_CODEC_MISSING 1 ///< built without the codec, or region erased
 #define DMR_CODEC_DAMAGED 2 ///< region present but its checksums differ

@@ -51,6 +51,29 @@ void dmr_setRxTalkgroup(uint32_t tg);
  */
 void dmr_setRxTimeslot(uint8_t ts);
 
+/**
+ * Start transmitting a group voice call in direct mode (bring-up): three
+ * voice LC headers, then voice bursts from dmrAudio_popTxFrame(), until
+ * dmr_stopTx().  The caller keys the RF chain before and starts the encoder.
+ *
+ * @param src: own radio ID.
+ * @param dst: talkgroup.
+ */
+void dmr_startTx(uint32_t src, uint32_t dst);
+
+/** Request the end of the transmission: a terminator is sent next. */
+void dmr_stopTx();
+
+/** @return true once the terminator has been sent. */
+bool dmr_txDone();
+
+/**
+ * Back to receive; to be called after dmr_txDone(), or to abort.
+ *
+ * @param elapsedMs: duration of the transmission, for the log.
+ */
+void dmr_endTx(uint32_t elapsedMs);
+
 #ifdef __cplusplus
 }
 #endif

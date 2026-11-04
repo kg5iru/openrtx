@@ -23,6 +23,7 @@
 #include "drivers/baseband/dmr_CS7000.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "core/log.h"
+#include "interfaces/delays.h"
 
 /*
  * Received AMBE+2 frames waiting to be played, 9 bytes each in DMR layout.
@@ -57,6 +58,42 @@ static bool popFrame(uint8_t frame[9])
     for (int i = 0; i < 9; i++)
         frame[i] = frameQueue[qTail][i];
     qTail = (qTail + 1) % QUEUE_FRAMES;
+    return true;
+}
+
+/*
+ * Encoded AMBE+2 frames waiting to be transmitted.  Single producer (the
+ * encode thread), single consumer (the DMR slot interrupt, 3 frames per
+ * voice burst).
+ */
+static constexpr unsigned TX_QUEUE_FRAMES = 16;
+static uint8_t txQueue[TX_QUEUE_FRAMES][9];
+static volatile unsigned txHead = 0;
+static volatile unsigned txTail = 0;
+
+static unsigned txQueued()
+{
+    return (txHead + TX_QUEUE_FRAMES - txTail) % TX_QUEUE_FRAMES;
+}
+
+bool dmrAudio_popTxFrame(uint8_t frame[9])
+{
+    if (txTail == txHead)
+        return false;
+    for (int i = 0; i < 9; i++)
+        frame[i] = txQueue[txTail][i];
+    txTail = (txTail + 1) % TX_QUEUE_FRAMES;
+    return true;
+}
+
+static bool pushTxFrame(const uint8_t frame[9])
+{
+    unsigned next = (txHead + 1) % TX_QUEUE_FRAMES;
+    if (next == txTail)
+        return false;
+    for (int i = 0; i < 9; i++)
+        txQueue[txHead][i] = frame[i];
+    txHead = next;
     return true;
 }
 
@@ -135,11 +172,16 @@ static void *decodeThread(void *arg)
             if (e >= 4)
                 badFrames++;
             framesDecoded++;
+            /*
+             * Frames resumed after running dry for less than 300 ms: those
+             * 20 ms buffers were a gap in the audio.  (Up to v39 the dry
+             * buffers were counted as they happened, so the end of every
+             * call added about 14 to the count.)
+             */
+            if ((sinceFrame > 0) && (sinceFrame < 15))
+                gaps += sinceFrame;
             sinceFrame = 0;
         } else {
-            // Ran dry within 300 ms of the last frame: a gap in the audio
-            if ((sinceFrame > 0) && (sinceFrame < 15))
-                gaps++;
             if (sinceFrame < 255)
                 sinceFrame++;
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
@@ -155,6 +197,90 @@ static void *decodeThread(void *arg)
           framesDecoded, errTotal, badFrames, gaps);
     running = false;
     return NULL;
+}
+
+/*
+ * Transmit: an encode thread keeps the TX queue a few frames ahead of the
+ * slot interrupt, which takes 3 frames per voice burst (every 60 ms).
+ * Bring-up stage (v40): the audio is a 1 kHz test tone, not the microphone.
+ */
+static ambe_cs7000_t encoder; /* ~10 kB, one context per direction */
+static pthread_t txThread;
+static volatile bool txRunning = false;
+static volatile bool txReqStop = false;
+static unsigned txFramesEncoded = 0;
+
+static void *encodeThread(void *arg)
+{
+    (void)arg;
+
+    static int16_t pcm[FRAME_SAMPLES];
+    uint8_t frame[9];
+    uint32_t phase = 0; // 1 kHz at 8 kHz: 8 samples per period
+
+    // One period of a 1 kHz sine at 8 kHz, peak 8000 (about -12 dBFS)
+    static const int16_t sine[8] = {
+        0, 5657, 8000, 5657, 0, -5657, -8000, -5657
+    };
+
+    ambe_cs7000_init(&encoder);
+    txFramesEncoded = 0;
+    LOG_I("ambe", "encode thread started (1 kHz test tone)");
+
+    while (!txReqStop) {
+        // Four frames ahead covers the next burst whatever the slot phase
+        if (txQueued() >= 4) {
+            sleepFor(0u, 5u);
+            continue;
+        }
+
+        for (size_t i = 0; i < FRAME_SAMPLES; i++)
+            pcm[i] = sine[(phase + i) % 8];
+        phase = (phase + FRAME_SAMPLES) % 8;
+
+        ambe_cs7000_encode(&encoder, pcm, frame);
+        pushTxFrame(frame);
+        txFramesEncoded++;
+    }
+
+    LOG_I("ambe", "encode thread stopped: %u frames", txFramesEncoded);
+    txRunning = false;
+    return NULL;
+}
+
+bool dmrAudio_startTx()
+{
+    if (txRunning || (dmrAudio_codecStatus() != DMR_CODEC_OK))
+        return false;
+
+    txHead = 0;
+    txTail = 0;
+    txReqStop = false;
+    txRunning = true;
+
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, DEC_STACK_SIZE);
+
+    struct sched_param param;
+    param.sched_priority = THREAD_PRIO_HIGH;
+    pthread_attr_setschedparam(&attr, &param);
+
+    if (pthread_create(&txThread, &attr, encodeThread, NULL) != 0) {
+        txRunning = false;
+        return false;
+    }
+
+    return true;
+}
+
+void dmrAudio_stopTx()
+{
+    if (!txRunning)
+        return;
+
+    txReqStop = true;
+    pthread_join(txThread, NULL);
 }
 
 bool dmrAudio_start(const pathId path)
@@ -230,6 +356,15 @@ bool dmrAudio_start(const pathId path)
 }
 
 void dmrAudio_stop()
+{
+}
+
+bool dmrAudio_startTx()
+{
+    return false;
+}
+
+void dmrAudio_stopTx()
 {
 }
 

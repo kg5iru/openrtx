@@ -5,8 +5,9 @@
  */
 
 /*
- * DMR receive for the CS7000-PLUS: HR_C6000 interrupt handling, voice burst
- * capture and call tracking.  Receive only.
+ * DMR for the CS7000-PLUS: HR_C6000 interrupt handling, voice burst capture
+ * and call tracking, and (bring-up, from v40) transmission of a voice call in
+ * direct mode.
  *
  * Interrupt pins (schematic net names, and the stock V9.00.96 firmware, which
  * configures GPIOC pins 0, 2 and 3 as falling-edge interrupts at 0x080887BA):
@@ -60,6 +61,19 @@ static void vspiReadVoice(uint8_t out[27])
     gpio_setPin(V_SPI_CS);
     for (int i = 0; i < 27; i++)
         out[i] = rx[2 + i];
+}
+
+// The stock encoder glue writes the 27 bytes of a burst with the command
+// bytes 0x03, 0x00 (fn 0x08085C02, called at 0x080861D0).
+static void vspiWriteVoice(const uint8_t in[27])
+{
+    uint8_t tx[29] = { 0x03, 0x00 };
+    uint8_t rx[29];
+    for (int i = 0; i < 27; i++)
+        tx[2 + i] = in[i];
+    gpio_clearPin(V_SPI_CS);
+    spi_transfer(&v_spi, tx, rx, sizeof(tx));
+    gpio_setPin(V_SPI_CS);
 }
 
 /*
@@ -286,9 +300,122 @@ static void pollVoicePort()
     }
 }
 
+/*
+ * Transmit, bring-up (v40): a group voice call in direct mode, built from the
+ * burst primitives of the stock slot state machine (state 4 at 0x08077474,
+ * see the project notes):
+ * - the handler runs at every slot interrupt and alternates: one slot arms a
+ *   burst (reg 0x41 = 0x80, then the payload, then reg 0x50 = burst type),
+ *   the next writes reg 0x41 = 0x00;
+ * - voice LC header: 9 byte link control written at address 0, reg 0x50 =
+ *   0x10 (data type 1); after the first one, reg 0x22 = 0x86.  The stock
+ *   code sends several, from a counter; 3 here;
+ * - voice burst: 27 bytes over V_SPI, the link control again (the chip
+ *   builds the embedded signalling from it), reg 0x50 = (n << 4) | 8 with n
+ *   the frame A..F;
+ * - terminator with LC: reg 0x50 = 0x20; in the slot after it, reg 0x22 =
+ *   0x46, 0x21 = 0x03, 0x41 = 0x40 (back to receive).
+ * The power amplifier stays keyed for the whole transmission, as the stock
+ * firmware does (OpMode_DMR keys it).
+ */
+enum : uint8_t { TX_OFF = 0, TX_HEADER, TX_VOICE, TX_END, TX_DONE };
+
+static constexpr uint8_t TX_HEADERS = 3;
+
+static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
+                                        0x73, 0x00, 0x2A, 0x6B };
+
+static volatile uint8_t txState = TX_OFF;
+static volatile bool txStopReq = false;
+static uint8_t txLc[9];
+static bool txArmSlot = false; // this slot interrupt arms a burst
+static uint8_t txHeaders = 0;
+static uint8_t txVoiceN = 0;
+static uint32_t txBursts = 0;
+static uint32_t txUnderruns = 0; // voice frames sent as silence: none encoded
+// Bring-up diagnostics: interrupts seen while transmitting.  The slot
+// interrupt comes every 30 ms during a received call but faster and
+// irregularly while the receiver searches; the TX handler alternates on it.
+static volatile uint32_t txSlotIrqs = 0;
+static volatile uint32_t txTxIrqs = 0;
+
+static void txSendTerminator()
+{
+    C6000.writeCfgRegister(0x41, 0x80);
+    C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
+    C6000.writeCfgRegister(0x50, 0x20);
+    txState = TX_END;
+}
+
+static void handleTxSlot()
+{
+    txArmSlot = !txArmSlot;
+
+    if (!txArmSlot) {
+        if (txState == TX_END) {
+            // The slot after the terminator: the stock end of transmission
+            C6000.writeCfgRegister(0x22, 0x46);
+            C6000.writeCfgRegister(0x21, 0x03);
+            C6000.writeCfgRegister(0x41, 0x40);
+            txState = TX_DONE;
+        } else {
+            C6000.writeCfgRegister(0x41, 0x00);
+        }
+        return;
+    }
+
+    switch (txState) {
+        case TX_HEADER:
+            C6000.writeCfgRegister(0x41, 0x80);
+            C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
+            C6000.writeCfgRegister(0x50, 0x10);
+            if (txHeaders == TX_HEADERS)
+                C6000.writeCfgRegister(0x22, 0x86); // stock: after the header
+            if (--txHeaders == 0) {
+                txState = TX_VOICE;
+                txVoiceN = 0;
+            }
+            break;
+
+        case TX_VOICE: {
+            if (txStopReq) {
+                txSendTerminator();
+                break;
+            }
+
+            uint8_t voice[27];
+            for (int i = 0; i < 3; i++) {
+                if (!dmrAudio_popTxFrame(&voice[9 * i])) {
+                    for (int k = 0; k < 9; k++)
+                        voice[(9 * i) + k] = ambeSilence[k];
+                    txUnderruns++;
+                }
+            }
+
+            C6000.writeCfgRegister(0x41, 0x80);
+            vspiWriteVoice(voice);
+            C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
+            C6000.writeCfgRegister(0x50, (uint8_t)((txVoiceN << 4) | 0x08));
+            txVoiceN = (txVoiceN + 1) % 6;
+            txBursts++;
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
 // DMR_TS_INT / TIME_SLOT_INTER (PC0 -> EXTI0): every slot (30 ms).
 static void handleSlot()
 {
+    if (txState != TX_OFF) {
+        txSlotIrqs++;
+        if (txState != TX_DONE)
+            handleTxSlot();
+        return;
+    }
+
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
     // boundary.  0x50 = receive with the layer 2 access bit set.
@@ -449,6 +576,13 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
 static void handleSys()
 {
     uint8_t flags = C6000.readCfgRegister(0x82);
+
+    // While transmitting, events are only acknowledged
+    if (txState != TX_OFF) {
+        C6000.writeCfgRegister(0x83, flags);
+        return;
+    }
+
     last52 = C6000.readCfgRegister(0x52);
     uint8_t reg51 = C6000.readCfgRegister(0x51);
     (void)C6000.readCfgRegister(0x5F);
@@ -494,6 +628,8 @@ void EXTI3_IRQHandler()
 void EXTI2_IRQHandler()
 {
     EXTI->PR1 = EXTI_PR1_PR2;
+    if (txState != TX_OFF)
+        txTxIrqs++;
 }
 
 void dmr_init()
@@ -550,6 +686,76 @@ void dmr_terminate()
 
     EXTI->IMR1 &= ~(EXTI_IMR1_IM0 | EXTI_IMR1_IM2 | EXTI_IMR1_IM3);
     callActive = false;
+}
+
+void dmr_startTx(uint32_t src, uint32_t dst)
+{
+    if (callActive)
+        endCall("transmit");
+
+    // Group voice call link control: FLCO 0, FID 0, no service options,
+    // destination and source IDs big-endian (as read on receive)
+    txLc[0] = 0x00;
+    txLc[1] = 0x00;
+    txLc[2] = 0x00;
+    txLc[3] = (dst >> 16) & 0xFF;
+    txLc[4] = (dst >> 8) & 0xFF;
+    txLc[5] = dst & 0xFF;
+    txLc[6] = (src >> 16) & 0xFF;
+    txLc[7] = (src >> 8) & 0xFF;
+    txLc[8] = src & 0xFF;
+
+    txStopReq = false;
+    txHeaders = TX_HEADERS;
+    txVoiceN = 0;
+    txBursts = 0;
+    txUnderruns = 0;
+    txArmSlot = false;
+    txSlotIrqs = 0;
+    txTxIrqs = 0;
+
+    C6000.writeCfgRegister(0x21, 0x02); // clear the vocoder encode buffer
+    C6000.writeCfgRegister(0x40, 0xC3); // stock, on entering a TX state
+
+    LOG_I("dmr", "tx start: src %lu dst %lu", (unsigned long)src,
+          (unsigned long)dst);
+    txState = TX_HEADER; // last: the slot interrupt starts from here
+}
+
+void dmr_stopTx()
+{
+    txStopReq = true;
+}
+
+bool dmr_txDone()
+{
+    return txState == TX_DONE;
+}
+
+void dmr_endTx(uint32_t elapsedMs)
+{
+    if (txState == TX_OFF)
+        return;
+
+    bool clean = (txState == TX_DONE);
+    txState = TX_OFF;
+
+    // Receive again, with the steps dmrMode() starts reception with
+    C6000.writeCfgRegister(0x41, 0x00);
+    C6000.writeCfgRegister(0x40, 0x03);
+    C6000.writeCfgRegister(0x41, 0x20);
+    C6000.writeCfgRegister(0x41, 0x00);
+    C6000.writeCfgRegister(0x41, 0x40);
+    C6000.writeCfgRegister(0x40, 0x43);
+    haveLast = false;
+    lcHave = false;
+
+    LOG_I("dmr", "tx end%s: %lu voice bursts, %lu frames sent as silence",
+          clean ? "" : " (aborted)", (unsigned long)txBursts,
+          (unsigned long)txUnderruns);
+    LOG_I("dmr", "tx: %lu ms, %lu slot interrupts, %lu TX interrupts",
+          (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
+          (unsigned long)txTxIrqs);
 }
 
 void dmr_setRxTalkgroup(uint32_t tg)
