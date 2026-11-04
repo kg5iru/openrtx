@@ -1009,19 +1009,32 @@ static void _ui_fsm_menuMacro(kbd_msg_t msg, bool *sync_rtx)
             }
             break;
         case 5:
-            // Cycle through radio modes: FM -> M17 -> DMR -> FM, skipping
-            // the modes that are not built in
+            // Cycle through radio modes: FM -> M17 -> YSF -> DMR -> FM,
+            // skipping the modes that are not built in
             switch(state.channel.mode)
             {
                 case OPMODE_FM:
                     #ifdef CONFIG_M17
                     state.channel.mode = OPMODE_M17;
+                    #elif defined(CONFIG_YSF_CS7000)
+                    state.channel.mode = OPMODE_YSF;
                     #elif defined(CONFIG_DMR_CS7000)
                     state.channel.mode = OPMODE_DMR;
                     #endif
                     break;
                 #ifdef CONFIG_M17
                 case OPMODE_M17:
+                    #if defined(CONFIG_YSF_CS7000)
+                    state.channel.mode = OPMODE_YSF;
+                    #elif defined(CONFIG_DMR_CS7000)
+                    state.channel.mode = OPMODE_DMR;
+                    #else
+                    state.channel.mode = OPMODE_FM;
+                    #endif
+                    break;
+                #endif
+                #ifdef CONFIG_YSF_CS7000
+                case OPMODE_YSF:
                     #ifdef CONFIG_DMR_CS7000
                     state.channel.mode = OPMODE_DMR;
                     #else

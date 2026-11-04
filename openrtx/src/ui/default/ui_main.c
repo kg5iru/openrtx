@@ -18,6 +18,9 @@
 #include "dmr_CS7000.h"
 #include "dmr_audio_CS7000.h"
 #endif
+#ifdef CONFIG_YSF_CS7000
+#include "ysf_CS7000.h"
+#endif
 
 void _ui_drawMainBackground()
 {
@@ -174,6 +177,40 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             #endif
             break;
         }
+
+        #ifdef CONFIG_YSF_CS7000
+        case OPMODE_YSF:
+        {
+            ysfCallInfo_t call;
+            if(ysf_getCallInfo(&call))
+            {
+                // Source callsign, then destination and DG-ID
+                gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "%s", (call.src[0] != '\0') ? call.src
+                                                                   : "...");
+                if(call.dt == 3)
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "VW: no audio");
+                else
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "%s DG%u",
+                              (call.dst[0] != '\0') ? call.dst : "-",
+                              (unsigned) call.dgid);
+            }
+            else
+            {
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "YSF");
+            }
+
+            #ifdef CONFIG_DMR_CS7000
+            if(dmrAudio_codecStatus() != DMR_CODEC_OK)
+                gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                          color_white, "no voice codec");
+            #endif
+            break;
+        }
+        #endif
 
         #ifdef CONFIG_M17
         case OPMODE_M17:
@@ -380,6 +417,9 @@ void _ui_drawMainBottom()
                            yellow_fab413);
             break;
         case OPMODE_DMR:
+        #ifdef CONFIG_YSF_CS7000
+        case OPMODE_YSF:
+        #endif
             gfx_drawSmeterLevel(meter_pos,
                                 meter_width,
                                 meter_height,
