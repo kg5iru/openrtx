@@ -581,6 +581,7 @@ cs7000p_src = ['platform/drivers/NVM/nvmem_CS7000.c',
                'platform/drivers/baseband/HR_C6000_CS7000.cpp',
                'platform/drivers/baseband/radio_CS7000.cpp',
                'platform/drivers/baseband/dmr_CS7000.cpp',
+               'platform/drivers/baseband/dmr_audio_CS7000.cpp',
                'platform/drivers/baseband/AK2365A.c',
                'platform/drivers/baseband/SKY72310.c',
                'platform/drivers/audio/Cx000_dac.cpp',
@@ -603,7 +604,6 @@ cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime'}
 # platform/drivers/vocoder/README.md
 if get_option('cs7000_ambe')
   cs7000p_src += ['platform/drivers/vocoder/ambe_cs7000.c',
-                  'platform/drivers/baseband/dmr_audio_CS7000.cpp',
                   'platform/drivers/baseband/OpMode_DMR_CS7000.cpp',
                   'platform/drivers/baseband/OpMode_YSF_CS7000.cpp'] + ysf_src
   cs7000p_inc += ['platform/drivers/vocoder', 'platform/drivers/baseband']
