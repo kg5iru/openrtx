@@ -135,9 +135,16 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             {
                 gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
                           color_white, "ID %lu", (unsigned long) call.src);
-                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "%s %lu", (call.flco == 0) ? "TG" : "ID",
-                          (unsigned long) call.dst);
+                if(call.slot != 0)
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "TS%u %s %lu",
+                              call.slot, (call.flco == 0) ? "TG" : "ID",
+                              (unsigned long) call.dst);
+                else
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "%s %lu",
+                              (call.flco == 0) ? "TG" : "ID",
+                              (unsigned long) call.dst);
             }
             else
             {
