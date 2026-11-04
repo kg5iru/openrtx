@@ -11,6 +11,7 @@
 #include "core/log.h"
 #include "drivers/baseband/dmr_CS7000.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
+#include "drivers/baseband/dmr_diag_CS7000.h"
 #include "OpMode_DMR_CS7000.hpp"
 
 /*
@@ -31,6 +32,7 @@ OpMode_DMR::OpMode_DMR()
     , pttHeld(false)
     , txTicks(0)
     , txStart(0)
+    , stopTick(0)
 {
 }
 
@@ -54,6 +56,7 @@ void OpMode_DMR::disable()
     if (transmitting) {
         dmrAudio_stopTx();
         dmr_endTx((uint32_t)(getTick() - txStart));
+        dmrDiag_txEnd();
         transmitting = false;
     }
 
@@ -123,11 +126,22 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
 
     if (transmitting) {
         txTicks++;
-        if (!ptt || (txTicks >= TX_TIMEOUT))
+        dmrDiag_inc(DIAG_BEAT);
+        if ((!ptt || (txTicks >= TX_TIMEOUT)) && (stopTick == 0)) {
             dmr_stopTx();
-        // The terminator is out, or the slot interrupt has stopped
-        if (dmr_txDone() || (txTicks >= (TX_TIMEOUT + 100)))
+            stopTick = txTicks;
+        }
+        /*
+         * Back to receive once the terminator is out.  If the slot interrupt
+         * has stopped (v40 on air: the radio sometimes stayed keyed after
+         * the PTT was released), give up after 500 ms without it.
+         */
+        bool stuck = (stopTick != 0) && ((txTicks - stopTick) >= 17);
+        if (dmr_txDone() || stuck) {
+            if (stuck && !dmr_txDone())
+                LOG_W("dmr", "terminator not sent within 500 ms: forced end");
             finishTx(status);
+        }
     }
 
     if (rxSquelchOpen())
@@ -149,12 +163,18 @@ void OpMode_DMR::stopRxAudio()
 
 void OpMode_DMR::startTx(rtxStatus_t *const status)
 {
+    // A lock-up while transmitting resets the radio after 5 s, unkeying it
+    dmrDiag_startWatchdog();
+    dmrDiag_txStart();
+
     stopRxAudio();
 
     if (!dmrAudio_startTx()) {
         LOG_W("dmr", "PTT: no voice encoder (codec missing or damaged)");
+        dmrDiag_txEnd();
         return;
     }
+    dmrDiag_set(DIAG_STAGE, STAGE_ENCODER);
 
     uint32_t tg = status->dmrRxTalkgroup;
     if (tg == 0)
@@ -162,21 +182,25 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
 
     radio_disableRtx();
     radio_enableTx();
+    dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
     dmr_startTx(status->dmrRadioId, tg);
 
     status->opStatus = TX;
     transmitting = true;
     txTicks = 0;
+    stopTick = 0;
     txStart = getTick();
     platform_ledOn(RED);
 }
 
 void OpMode_DMR::finishTx(rtxStatus_t *const status)
 {
+    dmrDiag_set(DIAG_STAGE, STAGE_FINISHING);
     dmrAudio_stopTx();
     dmr_endTx((uint32_t)(getTick() - txStart));
     radio_disableRtx();
     radio_enableRx();
+    dmrDiag_txEnd();
 
     status->opStatus = RX;
     transmitting = false;

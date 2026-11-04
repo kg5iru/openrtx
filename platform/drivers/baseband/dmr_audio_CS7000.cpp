@@ -24,6 +24,8 @@
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "core/log.h"
 #include "interfaces/delays.h"
+#include "drivers/baseband/dmr_diag_CS7000.h"
+#include <math.h>
 
 /*
  * Received AMBE+2 frames waiting to be played, 9 bytes each in DMR layout.
@@ -202,7 +204,12 @@ static void *decodeThread(void *arg)
 /*
  * Transmit: an encode thread keeps the TX queue a few frames ahead of the
  * slot interrupt, which takes 3 frames per voice burst (every 60 ms).
- * Bring-up stage (v40): the audio is a 1 kHz test tone, not the microphone.
+ *
+ * Bring-up test signal (v41): a synthetic vowel, a pulse-like harmonic
+ * series whose pitch glides between 90 and 170 Hz, shaped by two formants
+ * (700 and 1200 Hz) and gated on and off like syllables.  A steady 1 kHz
+ * tone (v40) encodes, after 0.2 s, to the same frame over and over (checked
+ * in emulation), which receivers treat as repeats and mute.
  */
 static ambe_cs7000_t encoder; /* ~10 kB, one context per direction */
 static pthread_t txThread;
@@ -210,22 +217,48 @@ static volatile bool txRunning = false;
 static volatile bool txReqStop = false;
 static unsigned txFramesEncoded = 0;
 
+static void testVowel(int16_t *pcm, uint32_t frame)
+{
+    static float phase = 0.0f;
+    const float twoPi = 6.2831853f;
+
+    for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+        float t = (float)((frame * FRAME_SAMPLES) + i) / 8000.0f;
+        float f0 = 130.0f + (40.0f * sinf(twoPi * 0.7f * t));
+        phase += twoPi * f0 / 8000.0f;
+        if (phase > twoPi)
+            phase -= twoPi;
+
+        // Syllables: 400 ms of sound, 200 ms of near silence
+        float syl = fmodf(t, 0.6f);
+        float env = (syl < 0.4f) ? sinf(3.1415927f * syl / 0.4f) : 0.02f;
+
+        float v = 0.0f;
+        for (int k = 1; k <= 24; k++) {
+            float fk = f0 * (float)k;
+            if (fk > 3600.0f)
+                break;
+            float d1 = (fk - 700.0f) / 150.0f;
+            float d2 = (fk - 1200.0f) / 200.0f;
+            float a = (1.0f / (1.0f + (d1 * d1))) + (0.6f / (1.0f + (d2 * d2)))
+                    + 0.05f;
+            v += a * sinf(phase * (float)k);
+        }
+
+        pcm[i] = (int16_t)(v * env * 2500.0f);
+    }
+}
+
 static void *encodeThread(void *arg)
 {
     (void)arg;
 
     static int16_t pcm[FRAME_SAMPLES];
     uint8_t frame[9];
-    uint32_t phase = 0; // 1 kHz at 8 kHz: 8 samples per period
-
-    // One period of a 1 kHz sine at 8 kHz, peak 8000 (about -12 dBFS)
-    static const int16_t sine[8] = {
-        0, 5657, 8000, 5657, 0, -5657, -8000, -5657
-    };
 
     ambe_cs7000_init(&encoder);
     txFramesEncoded = 0;
-    LOG_I("ambe", "encode thread started (1 kHz test tone)");
+    LOG_I("ambe", "encode thread started (test vowel)");
 
     while (!txReqStop) {
         // Four frames ahead covers the next burst whatever the slot phase
@@ -234,13 +267,14 @@ static void *encodeThread(void *arg)
             continue;
         }
 
-        for (size_t i = 0; i < FRAME_SAMPLES; i++)
-            pcm[i] = sine[(phase + i) % 8];
-        phase = (phase + FRAME_SAMPLES) % 8;
+        testVowel(pcm, txFramesEncoded);
 
+        dmrDiag_set(DIAG_ENC, txFramesEncoded | 0x80000000u);
         ambe_cs7000_encode(&encoder, pcm, frame);
-        pushTxFrame(frame);
         txFramesEncoded++;
+        dmrDiag_set(DIAG_ENC, txFramesEncoded);
+
+        pushTxFrame(frame);
     }
 
     LOG_I("ambe", "encode thread stopped: %u frames", txFramesEncoded);

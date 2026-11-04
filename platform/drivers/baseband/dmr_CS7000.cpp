@@ -33,6 +33,7 @@
 #include "drivers/baseband/HR_C6000.h"
 #include "drivers/baseband/dmr_CS7000.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
+#include "drivers/baseband/dmr_diag_CS7000.h"
 #include "core/log.h"
 #include "peripherals/spi.h"
 #include "drivers/SPI/spi_stm32.h"
@@ -301,6 +302,92 @@ static void pollVoicePort()
 }
 
 /*
+ * Transmit bring-up diagnostics (see dmr_diag_CS7000.h).
+ */
+static bool diagReady = false;
+
+void dmrDiag_init()
+{
+    if (diagReady)
+        return;
+
+    RCC->APB4ENR |= RCC_APB4ENR_RTCAPBEN;
+    (void)RCC->APB4ENR;
+    PWR->CR1 |= PWR_CR1_DBP;
+    while ((PWR->CR1 & PWR_CR1_DBP) == 0)
+        ;
+
+    if (dmrDiag_get(DIAG_MAGIC) == DIAG_MAGIC_VALUE) {
+        LOG_W("dmr",
+              "last transmission did not finish: stage %lu, %lu RTX "
+              "updates",
+              (unsigned long)dmrDiag_get(DIAG_STAGE),
+              (unsigned long)dmrDiag_get(DIAG_BEAT));
+        LOG_W("dmr",
+              "  slot irq %lu, sys irq %lu, tx irq %lu, in irq %lu, "
+              "sys flags %02lx",
+              (unsigned long)dmrDiag_get(DIAG_SLOT_IRQ),
+              (unsigned long)dmrDiag_get(DIAG_SYS_IRQ),
+              (unsigned long)dmrDiag_get(DIAG_TX_IRQ),
+              (unsigned long)dmrDiag_get(DIAG_IN_IRQ),
+              (unsigned long)dmrDiag_get(DIAG_SYS_FLAGS));
+        uint32_t enc = dmrDiag_get(DIAG_ENC);
+        LOG_W("dmr", "  encoder: %lu frames%s",
+              (unsigned long)(enc & 0x7FFFFFFF),
+              ((enc & 0x80000000u) != 0) ? ", stopped inside the codec" : "");
+    }
+
+    // Check that the registers hold a value (the backup domain is powered)
+    dmrDiag_set(DIAG_MAGIC, 0x12345678);
+    bool ok = (dmrDiag_get(DIAG_MAGIC) == 0x12345678);
+    for (int r = 0; r < DIAG_COUNT; r++)
+        dmrDiag_set((enum dmrDiagReg)r, 0);
+    if (!ok)
+        LOG_W("dmr", "backup registers not writable: no TX breadcrumbs");
+
+    diagReady = true;
+}
+
+void dmrDiag_txStart()
+{
+    for (int r = 1; r < DIAG_COUNT; r++)
+        dmrDiag_set((enum dmrDiagReg)r, 0);
+    dmrDiag_set(DIAG_STAGE, STAGE_PTT);
+    dmrDiag_set(DIAG_MAGIC, DIAG_MAGIC_VALUE);
+}
+
+void dmrDiag_txEnd()
+{
+    dmrDiag_set(DIAG_MAGIC, 0);
+    dmrDiag_set(DIAG_STAGE, STAGE_IDLE);
+}
+
+static bool watchdogOn = false;
+
+void dmrDiag_startWatchdog()
+{
+    if (watchdogOn)
+        return;
+
+    // LSI (32 kHz) / 64 = 500 Hz; 2500 counts = 5 s
+    IWDG1->KR = 0xCCCC; // start
+    IWDG1->KR = 0x5555; // unlock PR and RLR
+    IWDG1->PR = 4;
+    IWDG1->RLR = 2500;
+    while (IWDG1->SR != 0)
+        ;
+    IWDG1->KR = 0xAAAA;
+    watchdogOn = true;
+    LOG_I("dmr", "watchdog started (5 s)");
+}
+
+void dmrDiag_kickWatchdog()
+{
+    if (watchdogOn)
+        IWDG1->KR = 0xAAAA;
+}
+
+/*
  * Transmit, bring-up (v40): a group voice call in direct mode, built from the
  * burst primitives of the stock slot state machine (state 4 at 0x08077474,
  * see the project notes):
@@ -338,9 +425,12 @@ static uint32_t txUnderruns = 0; // voice frames sent as silence: none encoded
 // irregularly while the receiver searches; the TX handler alternates on it.
 static volatile uint32_t txSlotIrqs = 0;
 static volatile uint32_t txTxIrqs = 0;
+// The first two voice bursts sent, logged at the end of the transmission
+static uint8_t txFirstBursts[2][27];
 
 static void txSendTerminator()
 {
+    dmrDiag_set(DIAG_STAGE, STAGE_TERM);
     C6000.writeCfgRegister(0x41, 0x80);
     C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
     C6000.writeCfgRegister(0x50, 0x20);
@@ -354,6 +444,7 @@ static void handleTxSlot()
     if (!txArmSlot) {
         if (txState == TX_END) {
             // The slot after the terminator: the stock end of transmission
+            dmrDiag_set(DIAG_STAGE, STAGE_END);
             C6000.writeCfgRegister(0x22, 0x46);
             C6000.writeCfgRegister(0x21, 0x03);
             C6000.writeCfgRegister(0x41, 0x40);
@@ -366,6 +457,7 @@ static void handleTxSlot()
 
     switch (txState) {
         case TX_HEADER:
+            dmrDiag_set(DIAG_STAGE, STAGE_HEADER);
             C6000.writeCfgRegister(0x41, 0x80);
             C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
             C6000.writeCfgRegister(0x50, 0x10);
@@ -392,6 +484,11 @@ static void handleTxSlot()
                 }
             }
 
+            if (txBursts < 2) {
+                for (int i = 0; i < 27; i++)
+                    txFirstBursts[txBursts][i] = voice[i];
+            }
+            dmrDiag_set(DIAG_STAGE, STAGE_VOICE);
             C6000.writeCfgRegister(0x41, 0x80);
             vspiWriteVoice(voice);
             C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
@@ -411,8 +508,11 @@ static void handleSlot()
 {
     if (txState != TX_OFF) {
         txSlotIrqs++;
+        dmrDiag_inc(DIAG_SLOT_IRQ);
+        dmrDiag_set(DIAG_IN_IRQ, 1);
         if (txState != TX_DONE)
             handleTxSlot();
+        dmrDiag_set(DIAG_IN_IRQ, 0);
         return;
     }
 
@@ -579,6 +679,8 @@ static void handleSys()
 
     // While transmitting, events are only acknowledged
     if (txState != TX_OFF) {
+        dmrDiag_inc(DIAG_SYS_IRQ);
+        dmrDiag_set(DIAG_SYS_FLAGS, flags);
         C6000.writeCfgRegister(0x83, flags);
         return;
     }
@@ -628,8 +730,10 @@ void EXTI3_IRQHandler()
 void EXTI2_IRQHandler()
 {
     EXTI->PR1 = EXTI_PR1_PR2;
-    if (txState != TX_OFF)
+    if (txState != TX_OFF) {
         txTxIrqs++;
+        dmrDiag_inc(DIAG_TX_IRQ);
+    }
 }
 
 void dmr_init()
@@ -641,6 +745,7 @@ void dmr_init()
     golayInit();
     gfInit();
     vspiInit();
+    dmrDiag_init();
 
     callActive = false;
     voicePathOn = false;
@@ -719,6 +824,7 @@ void dmr_startTx(uint32_t src, uint32_t dst)
 
     LOG_I("dmr", "tx start: src %lu dst %lu", (unsigned long)src,
           (unsigned long)dst);
+    dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
     txState = TX_HEADER; // last: the slot interrupt starts from here
 }
 
@@ -756,6 +862,10 @@ void dmr_endTx(uint32_t elapsedMs)
     LOG_I("dmr", "tx: %lu ms, %lu slot interrupts, %lu TX interrupts",
           (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
           (unsigned long)txTxIrqs);
+    if (txBursts >= 1)
+        LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 0", txFirstBursts[0], 27);
+    if (txBursts >= 2)
+        LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 1", txFirstBursts[1], 27);
 }
 
 void dmr_setRxTalkgroup(uint32_t tg)
