@@ -27,6 +27,10 @@
 #include "pmu.h"
 #endif
 
+#ifdef CONFIG_DMR_CS7000
+#include "drivers/baseband/dmr_diag_CS7000.h"
+#endif
+
 /* Mutex for concurrent access to RTX state variable */
 pthread_mutex_t rtx_mutex;
 
@@ -178,9 +182,17 @@ void *rtx_threadFunc(void *arg)
     while(state.devStatus == RUNNING)
     {
         rtx_task();
+        #ifdef CONFIG_DMR_CS7000
+        // Started by the first DMR transmission: a stall of this thread
+        // resets the radio (see dmr_diag_CS7000.h)
+        dmrDiag_kickWatchdog();
+        #endif
     }
 
     rtx_terminate();
+    #ifdef CONFIG_DMR_CS7000
+    dmrDiag_kickWatchdog();
+    #endif
 
     return NULL;
 }
