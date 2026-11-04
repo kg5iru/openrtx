@@ -71,6 +71,10 @@ openrtx_src = ['openrtx/src/core/state.c',
 
 openrtx_inc = ['openrtx/include', 'platform']
 
+# Yaesu System Fusion receive protocol layer (CS7000-PLUS YSF mode, tests)
+ysf_src = ['openrtx/src/protocols/YSF/Coding.cpp',
+           'openrtx/src/protocols/YSF/FrameDecoder.cpp']
+
 ##
 ## OpenRTX UI sources
 ##
@@ -1291,7 +1295,12 @@ m17_replay_test = executable('m17_replay_test',
                              sources : unit_test_src + m17_replay_src + m17_signal_src + ['tests/unit/M17_replay.cpp'],
                              kwargs  : m17_replay_test_opts)
 
+ysf_frame_test = executable('ysf_frame_test',
+                            sources : unit_test_src + ysf_src + ['tests/unit/YSF_frame.cpp'],
+                            kwargs  : unit_test_opts)
+
 test('M17 Golay Unit Test',   m17_golay_test)
+test('YSF Frame Unit Test',   ysf_frame_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
