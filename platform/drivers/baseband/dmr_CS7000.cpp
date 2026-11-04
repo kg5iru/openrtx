@@ -418,9 +418,12 @@ static uint8_t txLc[9];
 static bool txArmSlot = false;    // this slot interrupt arms a burst
 static bool txFirst = false;      // reg 0x40 not yet switched to transmit
 static bool txVoiceReady = false; // voice for the next burst written already
+static uint32_t txLoadsTxIrq = 0; // voice writes made at RF_TX_INTER
+static uint32_t txLoadsSlot = 0;  // made in the arming slot (no RF_TX_INTER)
 // Slot interrupts while receiving, since the last TX start: tells whether
 // the chip's slot timer was running when the PTT was pressed
 static volatile uint32_t rxSlotIrqs = 0;
+static volatile uint32_t rxSlotIrqsTotal = 0; // never reset
 static uint8_t txHeaders = 0;
 static uint8_t txVoiceN = 0;
 static uint32_t txBursts = 0;
@@ -480,19 +483,6 @@ static void handleTxSlot()
     }
 
     if (!txArmSlot) {
-        /*
-         * The voice of the next burst is written here, half a frame ahead.
-         * v42 wrote it in the arming slot, right after 0x41 = 0x80, and an
-         * off-air capture (RSP1A, 2026-11-04) showed the chip sending the
-         * same 27 bytes for 1 to 20 bursts in a row, and zeros for the first
-         * three: most writes were not taken.  The stock code writes them
-         * from its encoder task, at no fixed point of the slot.
-         */
-        if ((txState == TX_VOICE) && !txStopReq) {
-            loadVoice();
-            txVoiceReady = true;
-        }
-
         if (txState == TX_END) {
             // The slot after the terminator: the stock end of transmission
             dmrDiag_set(DIAG_STAGE, STAGE_END);
@@ -526,8 +516,10 @@ static void handleTxSlot()
                 break;
             }
 
-            if (!txVoiceReady)
+            if (!txVoiceReady) {
                 loadVoice();
+                txLoadsSlot++;
+            }
             txVoiceReady = false;
 
             dmrDiag_set(DIAG_STAGE, STAGE_VOICE);
@@ -558,6 +550,7 @@ static void handleSlot()
     }
 
     rxSlotIrqs++;
+    rxSlotIrqsTotal++;
 
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
@@ -776,6 +769,20 @@ void EXTI2_IRQHandler()
     if (txState != TX_OFF) {
         txTxIrqs++;
         dmrDiag_inc(DIAG_TX_IRQ);
+
+        /*
+         * Voice for the next burst.  Off-air captures: written in the arming
+         * slot right after 0x41 = 0x80 (v42), the chip sent the same 27
+         * bytes for 1 to 20 bursts (mean about 5); written in the slot
+         * before (v43), for 7 to 32: when the write is made matters, and
+         * most writes are not taken.  RF_TX_INTER comes once per burst sent;
+         * v44 tries writing in answer to it.
+         */
+        if ((txState == TX_VOICE) && !txStopReq && !txVoiceReady) {
+            loadVoice();
+            txVoiceReady = true;
+            txLoadsTxIrq++;
+        }
     }
 }
 
@@ -864,6 +871,8 @@ void dmr_startTx(uint32_t src, uint32_t dst)
 
     txFirst = true;
     txVoiceReady = false;
+    txLoadsTxIrq = 0;
+    txLoadsSlot = 0;
 
     /*
      * Reg 0x11 bit 0.  The stock DMR channel load ends with 0x11 = 0x81
@@ -882,6 +891,11 @@ void dmr_startTx(uint32_t src, uint32_t dst)
     rxSlotIrqs = 0;
     dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
     txState = TX_HEADER; // last: the slot interrupt starts from here
+}
+
+uint32_t dmr_rxSlotIrqs()
+{
+    return rxSlotIrqsTotal;
 }
 
 uint32_t dmr_txSlotIrqs()
@@ -948,6 +962,8 @@ void dmr_endTx(uint32_t elapsedMs)
     LOG_I("dmr", "tx: %lu ms, %lu slot interrupts, %lu TX interrupts",
           (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
           (unsigned long)txTxIrqs);
+    LOG_I("dmr", "tx: voice written %lu times at RF_TX_INTER, %lu in the slot",
+          (unsigned long)txLoadsTxIrq, (unsigned long)txLoadsSlot);
     if (txBursts >= 1)
         LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 0", txFirstBursts[0], 27);
     if (txBursts >= 2)

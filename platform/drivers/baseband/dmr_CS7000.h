@@ -61,6 +61,9 @@ void dmr_setRxTimeslot(uint8_t ts);
  */
 void dmr_startTx(uint32_t src, uint32_t dst);
 
+/** @return slot interrupts seen while receiving, since dmr_init(). */
+uint32_t dmr_rxSlotIrqs();
+
 /** @return slot interrupts seen since dmr_startTx(). */
 uint32_t dmr_txSlotIrqs();
 
