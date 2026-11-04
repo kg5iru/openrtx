@@ -54,6 +54,7 @@ typedef struct
 #ifdef CONFIG_DMR_CS7000
     uint8_t dmr_cc;               // DMR colour code + 1, 0 = not set (1)
     uint32_t dmr_rxTg;            // DMR talkgroup to receive, 0 = all
+    uint8_t dmr_ts;               // DMR timeslot to receive, 0 = any, 1 or 2
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -86,6 +87,7 @@ static const settings_t default_settings =
 #ifdef CONFIG_DMR_CS7000
     0,                            // DMR colour code not set (1)
     0,                            // Receive all DMR talkgroups
+    0,                            // Receive either DMR timeslot
 #endif
 };
 
@@ -103,6 +105,12 @@ static inline uint8_t settings_dmrColourCode(const settings_t *s)
 static inline void settings_setDmrColourCode(settings_t *s, uint8_t cc)
 {
     s->dmr_cc = (cc & 0x0F) + 1;
+}
+
+// DMR timeslot filter: 0 = either timeslot, 1 = TS1, 2 = TS2
+static inline uint8_t settings_dmrTimeslot(const settings_t *s)
+{
+    return (s->dmr_ts > 2) ? 0 : s->dmr_ts;
 }
 #endif
 

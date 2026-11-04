@@ -94,6 +94,7 @@ void *ui_threadFunc(void *arg)
             #ifdef CONFIG_DMR_CS7000
             rtx_cfg.dmrColourCode  = settings_dmrColourCode(&state.settings);
             rtx_cfg.dmrRxTalkgroup = state.settings.dmr_rxTg;
+            rtx_cfg.dmrTimeslot    = settings_dmrTimeslot(&state.settings);
             #endif
 
             pthread_mutex_unlock(&rtx_mutex);

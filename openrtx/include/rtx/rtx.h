@@ -56,6 +56,7 @@ typedef struct
 #ifdef CONFIG_DMR_CS7000
     uint8_t  dmrColourCode;            /**< DMR colour code            */
     uint32_t dmrRxTalkgroup;           /**< DMR RX talkgroup, 0 = all  */
+    uint8_t  dmrTimeslot;              /**< DMR RX timeslot, 0 = any   */
 #endif
 }
 rtxStatus_t;
