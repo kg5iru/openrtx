@@ -48,6 +48,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     (void)newCfg;
 
     dmr_setRxTalkgroup(status->dmrRxTalkgroup);
+    dmr_setRxTimeslot(status->dmrTimeslot);
 
     if ((status->opStatus == OFF) && enterRx) {
         radio_disableRtx();

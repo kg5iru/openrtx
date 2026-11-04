@@ -32,6 +32,7 @@ typedef struct {
     uint8_t flco; ///< 0 = group voice, 3 = unit-to-unit voice
     uint32_t dst; ///< destination ID (talkgroup or radio)
     uint32_t src; ///< source radio ID
+    uint8_t slot; ///< timeslot, 1 or 2; 0 when unknown (no timeslot set)
 } dmrCallInfo_t;
 
 /** Returns false when no call is being received. */
@@ -42,6 +43,13 @@ bool dmr_getCallInfo(dmrCallInfo_t *out);
  * shown.  0 receives every call.  Private calls are always received.
  */
 void dmr_setRxTalkgroup(uint32_t tg);
+
+/**
+ * Timeslot to receive, 1 or 2: calls on the other slot are muted and not
+ * shown.  0 receives both.  The chip reports the slot only in the mode
+ * radio_CS7000.cpp sets when a timeslot is selected.
+ */
+void dmr_setRxTimeslot(uint8_t ts);
 
 #ifdef __cplusplus
 }

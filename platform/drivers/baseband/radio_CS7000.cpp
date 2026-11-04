@@ -472,10 +472,12 @@ void radio_updateConfiguration()
          * channel load at 0x0804B614) writes reg 0x10 = 0x6C or 0x6D, with
          * bit 0 from the channel's timeslot bit (cfg+0x34 bit 4), and reg
          * 0x5F = 0xC0, on its repeater path; 0x6A (what dmrMode() writes)
-         * on its other paths.  The OpenGD77 driver, same chip, writes 0x6E
-         * ("repeater, aligned, slot 1").  0x6C = TS1 and 0x6D = TS2 is
-         * assumed from the bit order and is to be confirmed on air.  The
-         * receiver is re-armed as the stock code does after the change.
+         * on its other paths.  On air (v37, duplex hotspot) the chip still
+         * receives both slots in 0x6C / 0x6D, but then reports the CACH TC
+         * bit in reg 0x52 bit 2, and dmr_CS7000.cpp filters on it.  Either
+         * timeslot keeps 0x6A, which also receives MS-sourced (simplex)
+         * bursts without a CACH.  The receiver is re-armed as the stock code
+         * does after the change.
          */
         uint8_t ts   = config->dmrTimeslot;
         uint8_t mode = (ts == 1) ? 0x6C : ((ts == 2) ? 0x6D : 0x6A);

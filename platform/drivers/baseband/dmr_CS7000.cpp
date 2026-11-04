@@ -156,29 +156,66 @@ static uint32_t callDropped = 0;
  * header was missed (late entry: its talkgroup is unknown).
  */
 static volatile uint32_t rxTalkgroup = 0;
-static volatile bool callMuted = false;
+static volatile bool tgMuted = false;
 
 /*
- * Timeslot bring-up: the slot of a burst is not decoded yet.  Each call's
- * first voice burst is logged with the slot counter parity and registers
- * 0x52 and 0x57 (read at the last system interrupt), to find out which of
- * them follows the timeslot.
+ * Timeslot filter.  With a timeslot set, radio_CS7000.cpp puts the chip in
+ * the stock repeater mode (reg 0x10 = 0x6C / 0x6D).  The chip still receives
+ * both slots, but in that mode reg 0x52 bit 2 carries the CACH TDMA channel
+ * (TC) bit: 0 on TS1, 1 on TS2 (v37 log, 2026-11-04: 14 of 14 voice bursts
+ * of 7 calls on known slots; in the mode dmrMode() sets, 0x6A, the bit is
+ * always 0).  The bit was read after 0x50 and 0x51, at the first voice
+ * bursts, so it is read the same way here.  A call's slot is taken from its
+ * first voice burst and the call is muted when it is the other slot; the
+ * later bursts are checked too and disagreements are counted.
  */
-static volatile uint32_t slotCount = 0;
+static volatile uint8_t rxTimeslot = 0;
+static volatile bool slotMuted = false;
+static uint8_t callSlot = 0;
+static uint32_t slotDisagree = 0;
+
+static inline bool callMuted()
+{
+    return tgMuted || slotMuted;
+}
+
+// Registers read at the last system interrupt, logged with each call
 static uint8_t last52 = 0;
 static uint8_t last57 = 0;
 
 static void endCall(const char *why)
 {
-    if (callActive)
+    if (callActive) {
         LOG_I("dmr", "call end (%s): %lu bursts, %lu frames lost", why,
               (unsigned long)callBursts, (unsigned long)callDropped);
+        if (slotDisagree != 0)
+            LOG_I("dmr", "slot bit disagreed with TS%u on %lu bursts", callSlot,
+                  (unsigned long)slotDisagree);
+    }
     // The voice FIFO is left to drain: the last bursts of the call are still
     // waiting to be played.
     callActive = false;
-    callMuted = false;
+    tgMuted = false;
+    slotMuted = false;
+    callSlot = 0;
+    slotDisagree = 0;
     voicePathOn = false;
     termSeen = false;
+}
+
+/*
+ * Timeslot of the voice burst just received, 1 or 2, from the CACH TC bit
+ * (reg 0x52 bit 2); 0 when the chip is not in the mode that decodes it.
+ */
+static uint8_t burstSlot()
+{
+    if (rxTimeslot == 0)
+        return 0;
+
+    (void)C6000.readCfgRegister(0x50);
+    (void)C6000.readCfgRegister(0x51);
+    uint8_t r52 = C6000.readCfgRegister(0x52);
+    return ((r52 & 0x04) != 0) ? 2 : 1;
 }
 
 /*
@@ -187,47 +224,6 @@ static void endCall(const char *why)
  * something else, so the same bytes are read several times and only the first
  * read is kept.
  */
-/*
- * Timeslot capture (v33): for the first three voice bursts of each call, dump
- * the status registers 0x50..0x5F and 0x90, and the first 9 bytes of the two
- * RX RAM burst windows (0x30 and 0x60, which the stock firmware picks per
- * slot), to find a value that follows the timeslot.  The slot counter parity
- * cannot: the hotspot drops its carrier between calls and the chip re-locks
- * on an arbitrary slot.
- */
-/*
- * v34 (2026-11-03) showed the burst windows do not follow the timeslot: the
- * active one (0x30 or 0x60) changed between two calls on the same slot, as
- * the chip relocks on whichever slot comes first after the hotspot keys up.
- * v36 dumped the whole RX RAM 0x00..0x9F at the first two voice bursts, and
- * the status registers sampled at the last four slot interrupts: in ten calls
- * on known timeslots (2026-11-04) no RAM bit and no register bit followed the
- * timeslot, with the chip in the mode dmrMode() sets (reg 0x10 = 0x6A).  The
- * timeslot is now selected in the chip (reg 0x10 = 0x6C / 0x6D, see
- * radio_CS7000.cpp); the registers are still logged at the first two voice
- * bursts of each call, to check that mode on air.
- */
-static uint8_t slotRegs[4][5]; // 0x52 0x53 0x57 0x5E 0x5F per slot event
-static uint8_t slotRegIdx = 0;
-
-static void dumpSlotState(uint32_t n)
-{
-    uint8_t regs[17];
-    for (int i = 0; i < 16; i++)
-        regs[i] = C6000.readCfgRegister(0x50 + i);
-    regs[16] = C6000.readCfgRegister(0x90);
-
-    LOG_D("dmr", "voice %lu: slot %lu, at event 52=%02x 57=%02x",
-          (unsigned long)n, (unsigned long)slotCount, last52, last57);
-    LOG_HEX(LOG_LVL_DEBUG, "dmr", "regs 50-5f,90", regs, sizeof(regs));
-
-    for (int k = 0; k < 4; k++) {
-        const uint8_t *r = slotRegs[(slotRegIdx + k) % 4];
-        LOG_D("dmr", "slot event -%d: 52=%02x 53=%02x 57=%02x 5e=%02x 5f=%02x",
-              4 - k, r[0], r[1], r[2], r[3], r[4]);
-    }
-}
-
 static void pollVoicePort()
 {
     uint8_t buf[27];
@@ -253,19 +249,27 @@ static void pollVoicePort()
     // talkgroup filter set, its talkgroup is unknown: muted until a header.
     if (!callActive) {
         callActive = true;
-        callMuted = (rxTalkgroup != 0);
+        tgMuted = (rxTalkgroup != 0);
         callBursts = 0;
         callDropped = 0;
         LOG_I("dmr", "call start: late entry%s",
-              callMuted ? ", muted (talkgroup unknown)" : "");
+              tgMuted ? ", muted (talkgroup unknown)" : "");
     }
 
-    if (callBursts < 2)
-        dumpSlotState(callBursts);
+    uint8_t slot = burstSlot();
+    if (slot != 0) {
+        if (callSlot == 0) {
+            callSlot = slot;
+            slotMuted = (slot != rxTimeslot);
+            LOG_I("dmr", "call on TS%u%s", slot, slotMuted ? " (muted)" : "");
+        } else if (slot != callSlot) {
+            slotDisagree++;
+        }
+    }
 
     slotsSinceVoice = 0;
     termSeen = false;
-    if (callMuted) {
+    if (callMuted()) {
         callBursts++;
         return;
     }
@@ -285,16 +289,6 @@ static void pollVoicePort()
 // DMR_TS_INT / TIME_SLOT_INTER (PC0 -> EXTI0): every slot (30 ms).
 static void handleSlot()
 {
-    slotCount++;
-
-    uint8_t *r = slotRegs[slotRegIdx];
-    r[0] = C6000.readCfgRegister(0x52);
-    r[1] = C6000.readCfgRegister(0x53);
-    r[2] = C6000.readCfgRegister(0x57);
-    r[3] = C6000.readCfgRegister(0x5E);
-    r[4] = C6000.readCfgRegister(0x5F);
-    slotRegIdx = (slotRegIdx + 1) % 4;
-
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
     // boundary.  0x50 = receive with the layer 2 access bit set.
@@ -417,14 +411,17 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         callInfo.src = src;
         // Private calls always pass: there is no own-ID setting yet.
         uint32_t tg = rxTalkgroup;
-        callMuted = (flco == 0) && (tg != 0) && (dst != tg);
+        tgMuted = (flco == 0) && (tg != 0) && (dst != tg);
         if (changed)
             LOG_I("dmr", "call: flco %u src %lu dst %lu%s 52=%02x 57=%02x",
                   flco, (unsigned long)src, (unsigned long)dst,
-                  callMuted ? " (muted)" : "", last52, last57);
+                  tgMuted ? " (muted)" : "", last52, last57);
         if (!callActive) {
             callBursts = 0;
             callDropped = 0;
+            callSlot = 0;
+            slotMuted = false;
+            slotDisagree = 0;
         }
         callActive = true;
         slotsSinceVoice = 0;
@@ -560,10 +557,16 @@ void dmr_setRxTalkgroup(uint32_t tg)
     rxTalkgroup = tg;
 }
 
+void dmr_setRxTimeslot(uint8_t ts)
+{
+    rxTimeslot = (ts > 2) ? 0 : ts;
+}
+
 bool dmr_getCallInfo(dmrCallInfo_t *out)
 {
-    if (!callActive || callMuted)
+    if (!callActive || callMuted())
         return false;
     *out = callInfo;
+    out->slot = callSlot;
     return true;
 }
