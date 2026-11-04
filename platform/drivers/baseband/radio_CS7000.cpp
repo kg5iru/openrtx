@@ -228,6 +228,7 @@ void radio_setOpmode(const enum opmode mode)
             break;
 
         case OPMODE_M17:
+        case OPMODE_YSF:                // C4FM: the same baseband path as M17
             C6000.fmMode();             // HR_C5000 in FM mode
             C6000.setInputGain(+9);     // Input gain in dB, found experimentally
             C6000.setModFactor(0x25);

@@ -77,7 +77,8 @@ enum opmode
     OPMODE_NONE = 0,        /**< No opMode selected */
     OPMODE_FM   = 1,        /**< Analog FM          */
     OPMODE_DMR  = 2,        /**< DMR                */
-    OPMODE_M17  = 3         /**< M17                */
+    OPMODE_M17  = 3,        /**< M17                */
+    OPMODE_YSF  = 5         /**< Yaesu System Fusion (4 is P25 elsewhere) */
 };
 
 /**
