@@ -184,6 +184,7 @@ const char * settings_m17_items[] =
 const char *settings_dmr_items[] =
 {
     "Colour Code",
+    "Timeslot",
     "Talkgroup"
 };
 #endif
@@ -2502,11 +2503,25 @@ void ui_updateFSM(bool *sync_rtx)
                 break;
 #endif
 #ifdef CONFIG_DMR_CS7000
-            // DMR Settings: colour code and receive talkgroup filter
+            // DMR Settings: colour code, timeslot and receive talkgroup filter
             case SETTINGS_DMR:
                 if(ui_state.edit_mode)
                 {
-                    if(ui_state.menu_selected == DMR_COLOUR_CODE)
+                    if(ui_state.menu_selected == DMR_TIMESLOT)
+                    {
+                        // Any -> 1 -> 2 -> Any
+                        uint8_t ts = settings_dmrTimeslot(&state.settings);
+                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
+                           msg.keys & KEY_LEFT)
+                            state.settings.dmr_ts = (ts + 2) % 3;
+                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
+                                msg.keys & KEY_RIGHT)
+                            state.settings.dmr_ts = (ts + 1) % 3;
+                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        *sync_rtx = true;
+                    }
+                    else if(ui_state.menu_selected == DMR_COLOUR_CODE)
                     {
                         uint8_t cc = settings_dmrColourCode(&state.settings);
                         if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
@@ -2570,6 +2585,14 @@ void ui_updateFSM(bool *sync_rtx)
                     uint8_t cc = settings_dmrColourCode(&state.settings);
                     cc += (msg.keys & KEY_RIGHT) ? 1 : 15;
                     settings_setDmrColourCode(&state.settings, cc);
+                    *sync_rtx = true;
+                }
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_TIMESLOT))
+                {
+                    uint8_t ts = settings_dmrTimeslot(&state.settings);
+                    ts += (msg.keys & KEY_RIGHT) ? 1 : 2;
+                    state.settings.dmr_ts = ts % 3;
                     *sync_rtx = true;
                 }
                 else if(msg.keys & KEY_ESC)

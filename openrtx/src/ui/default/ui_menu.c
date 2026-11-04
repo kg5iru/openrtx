@@ -475,6 +475,16 @@ int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
                       settings_dmrColourCode(&last_state.settings));
             break;
 
+        case DMR_TIMESLOT:
+        {
+            uint8_t ts = settings_dmrTimeslot(&last_state.settings);
+            if(ts == 0)
+                sniprintf(buf, max_len, "Any");
+            else
+                sniprintf(buf, max_len, "%u", ts);
+            break;
+        }
+
         case DMR_TALKGROUP:
             if(dmrTgTyping != NULL)
                 sniprintf(buf, max_len, "%s_", dmrTgTyping);

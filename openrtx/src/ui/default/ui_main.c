@@ -141,15 +141,21 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             }
             else
             {
-                // Idle: colour code and talkgroup filter
+                // Idle: colour code, timeslot and talkgroup filters
+                uint8_t cc = settings_dmrColourCode(&last_state.settings);
+                uint8_t ts = settings_dmrTimeslot(&last_state.settings);
+                char slot[5] = "";
+                if(ts != 0)
+                    sniprintf(slot, sizeof(slot), "TS%u ", ts);
+
                 if(last_state.settings.dmr_rxTg == 0)
                     gfx_print(layout.line2_pos, layout.line2_font,
-                              TEXT_ALIGN_CENTER, color_white, "DMR CC%u All",
-                              settings_dmrColourCode(&last_state.settings));
+                              TEXT_ALIGN_CENTER, color_white, "DMR CC%u %sAll",
+                              cc, slot);
                 else
                     gfx_print(layout.line2_pos, layout.line2_font,
-                              TEXT_ALIGN_CENTER, color_white, "DMR CC%u TG%lu",
-                              settings_dmrColourCode(&last_state.settings),
+                              TEXT_ALIGN_CENTER, color_white, "DMR CC%u %sTG%lu",
+                              cc, slot,
                               (unsigned long) last_state.settings.dmr_rxTg);
             }
 
