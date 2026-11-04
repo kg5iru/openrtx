@@ -61,6 +61,15 @@ void dmr_setRxTimeslot(uint8_t ts);
  */
 void dmr_startTx(uint32_t src, uint32_t dst);
 
+/** @return slot interrupts seen since dmr_startTx(). */
+uint32_t dmr_txSlotIrqs();
+
+/**
+ * Bring-up fallback: arm the first voice LC header from the calling thread,
+ * for when no slot interrupt has come since dmr_startTx().
+ */
+void dmr_kickTx();
+
 /** Request the end of the transmission: a terminator is sent next. */
 void dmr_stopTx();
 

@@ -127,6 +127,8 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     if (transmitting) {
         txTicks++;
         dmrDiag_inc(DIAG_BEAT);
+        if ((txTicks == 10) && (dmr_txSlotIrqs() == 0))
+            dmr_kickTx();
         if ((!ptt || (txTicks >= TX_TIMEOUT)) && (stopTick == 0)) {
             dmr_stopTx();
             stopTick = txTicks;

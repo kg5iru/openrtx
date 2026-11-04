@@ -416,6 +416,10 @@ static volatile uint8_t txState = TX_OFF;
 static volatile bool txStopReq = false;
 static uint8_t txLc[9];
 static bool txArmSlot = false; // this slot interrupt arms a burst
+static bool txFirst = false;   // reg 0x40 not yet switched to transmit
+// Slot interrupts while receiving, since the last TX start: tells whether
+// the chip's slot timer was running when the PTT was pressed
+static volatile uint32_t rxSlotIrqs = 0;
 static uint8_t txHeaders = 0;
 static uint8_t txVoiceN = 0;
 static uint32_t txBursts = 0;
@@ -440,6 +444,19 @@ static void txSendTerminator()
 static void handleTxSlot()
 {
     txArmSlot = !txArmSlot;
+
+    /*
+     * The stock code writes reg 0x40 = 0xC3 on its first pass through the
+     * TX state, inside the slot task, right before the first 0x41 = 0x80.
+     * v41 wrote it (and 0x21 = 0x02) from the RTX thread at PTT time: when
+     * the receiver had not locked on a signal shortly before, the slot
+     * interrupt then stopped altogether and nothing was sent (6 of 10
+     * presses; the 4 that worked each followed a received call).
+     */
+    if (txFirst) {
+        C6000.writeCfgRegister(0x40, 0xC3);
+        txFirst = false;
+    }
 
     if (!txArmSlot) {
         if (txState == TX_END) {
@@ -515,6 +532,8 @@ static void handleSlot()
         dmrDiag_set(DIAG_IN_IRQ, 0);
         return;
     }
+
+    rxSlotIrqs++;
 
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
@@ -819,13 +838,44 @@ void dmr_startTx(uint32_t src, uint32_t dst)
     txSlotIrqs = 0;
     txTxIrqs = 0;
 
-    C6000.writeCfgRegister(0x21, 0x02); // clear the vocoder encode buffer
-    C6000.writeCfgRegister(0x40, 0xC3); // stock, on entering a TX state
+    txFirst = true;
 
-    LOG_I("dmr", "tx start: src %lu dst %lu", (unsigned long)src,
-          (unsigned long)dst);
+    LOG_I("dmr",
+          "tx start: src %lu dst %lu, %lu slot interrupts since the "
+          "last one",
+          (unsigned long)src, (unsigned long)dst, (unsigned long)rxSlotIrqs);
+    rxSlotIrqs = 0;
     dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
     txState = TX_HEADER; // last: the slot interrupt starts from here
+}
+
+uint32_t dmr_txSlotIrqs()
+{
+    return txSlotIrqs;
+}
+
+void dmr_kickTx()
+{
+    if ((txState != TX_HEADER) || (txSlotIrqs != 0))
+        return;
+
+    // Arm the first header from here, with the DMR interrupts held off so
+    // that a slot interrupt cannot split the sequence
+    NVIC_DisableIRQ(EXTI0_IRQn);
+    NVIC_DisableIRQ(EXTI3_IRQn);
+    C6000.writeCfgRegister(0x40, 0xC3);
+    C6000.writeCfgRegister(0x41, 0x80);
+    C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
+    C6000.writeCfgRegister(0x50, 0x10);
+    C6000.writeCfgRegister(0x22, 0x86);
+    txFirst = false;
+    txArmSlot = true; // the next slot interrupt is the idle one
+    txHeaders--;
+    NVIC_EnableIRQ(EXTI3_IRQn);
+    NVIC_EnableIRQ(EXTI0_IRQn);
+
+    LOG_W("dmr", "no slot interrupt 300 ms after PTT: first header armed "
+                 "from the RTX thread");
 }
 
 void dmr_stopTx()
