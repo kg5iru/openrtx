@@ -199,9 +199,13 @@ static void endCall(const char *why)
  * v34 (2026-11-03) showed the burst windows do not follow the timeslot: the
  * active one (0x30 or 0x60) changed between two calls on the same slot, as
  * the chip relocks on whichever slot comes first after the hotspot keys up.
- * v36 dumps the whole RX RAM 0x00..0x9F at the first two voice bursts, and
- * the status registers sampled at the last four slot interrupts, looking for
- * the CACH timeslot (TC) bit.
+ * v36 dumped the whole RX RAM 0x00..0x9F at the first two voice bursts, and
+ * the status registers sampled at the last four slot interrupts: in ten calls
+ * on known timeslots (2026-11-04) no RAM bit and no register bit followed the
+ * timeslot, with the chip in the mode dmrMode() sets (reg 0x10 = 0x6A).  The
+ * timeslot is now selected in the chip (reg 0x10 = 0x6C / 0x6D, see
+ * radio_CS7000.cpp); the registers are still logged at the first two voice
+ * bursts of each call, to check that mode on air.
  */
 static uint8_t slotRegs[4][5]; // 0x52 0x53 0x57 0x5E 0x5F per slot event
 static uint8_t slotRegIdx = 0;
@@ -217,23 +221,10 @@ static void dumpSlotState(uint32_t n)
           (unsigned long)n, (unsigned long)slotCount, last52, last57);
     LOG_HEX(LOG_LVL_DEBUG, "dmr", "regs 50-5f,90", regs, sizeof(regs));
 
-    if (n >= 2)
-        return;
-
     for (int k = 0; k < 4; k++) {
         const uint8_t *r = slotRegs[(slotRegIdx + k) % 4];
         LOG_D("dmr", "slot event -%d: 52=%02x 53=%02x 57=%02x 5e=%02x 5f=%02x",
               4 - k, r[0], r[1], r[2], r[3], r[4]);
-    }
-
-    for (uint8_t addr = 0; addr < 0xA0; addr += 16) {
-        uint8_t ram[16];
-        char label[12] = "ram 00";
-        const char hex[] = "0123456789abcdef";
-        label[4] = hex[addr >> 4];
-        label[5] = hex[addr & 0x0F];
-        C6000.readRxBurst(addr, ram, sizeof(ram));
-        LOG_HEX(LOG_LVL_DEBUG, "dmr", label, ram, sizeof(ram));
     }
 }
 
@@ -269,7 +260,7 @@ static void pollVoicePort()
               callMuted ? ", muted (talkgroup unknown)" : "");
     }
 
-    if (callBursts < 3)
+    if (callBursts < 2)
         dumpSlotState(callBursts);
 
     slotsSinceVoice = 0;

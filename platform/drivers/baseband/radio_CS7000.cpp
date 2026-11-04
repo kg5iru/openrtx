@@ -38,6 +38,9 @@ static uint8_t txpwr_hi  = 0;                  // APC voltage for TX output powe
 static struct rssiParams rssi;                 // RSSI curve parameters
 
 static enum opstatus radioStatus;               // Current operating status
+#ifdef CONFIG_DMR_CS7000
+static uint8_t dmrSlotMode = 0;                 // HR_C6000 reg 0x10 as last written
+#endif
 
 static int16_t __attribute__((section(".bss2"))) ctcssSamples[128];
 static streamCtx ctcssCtx;
@@ -243,6 +246,9 @@ void radio_setOpmode(const enum opmode mode)
 #ifdef PLATFORM_CS7000P
             dmr_init();
             C6000.dmrMode();
+#ifdef CONFIG_DMR_CS7000
+            dmrSlotMode = 0x6A;         // As dmrMode() leaves it
+#endif
 #endif
             break;
 
@@ -458,7 +464,34 @@ void radio_updateConfiguration()
     // Colour code: the stock channel load writes it to reg 0x1F, high nibble
     // (dmrMode() leaves colour code 1 there).
     if(config->opMode == OPMODE_DMR)
+    {
         C6000.writeCfgRegister(0x1F, (config->dmrColourCode & 0x0F) << 4);
+
+        /*
+         * Timeslot.  The stock firmware's DMR set-up (fn 0x0802AD44 and the
+         * channel load at 0x0804B614) writes reg 0x10 = 0x6C or 0x6D, with
+         * bit 0 from the channel's timeslot bit (cfg+0x34 bit 4), and reg
+         * 0x5F = 0xC0, on its repeater path; 0x6A (what dmrMode() writes)
+         * on its other paths.  The OpenGD77 driver, same chip, writes 0x6E
+         * ("repeater, aligned, slot 1").  0x6C = TS1 and 0x6D = TS2 is
+         * assumed from the bit order and is to be confirmed on air.  The
+         * receiver is re-armed as the stock code does after the change.
+         */
+        uint8_t ts   = config->dmrTimeslot;
+        uint8_t mode = (ts == 1) ? 0x6C : ((ts == 2) ? 0x6D : 0x6A);
+        if(mode != dmrSlotMode)
+        {
+            C6000.writeCfgRegister(0x10, mode);
+            C6000.writeCfgRegister(0x5F, (mode == 0x6A) ? 0xF0 : 0xC0);
+            C6000.writeCfgRegister(0x81, 0xFF);
+            C6000.writeCfgRegister(0x40, 0x03);
+            C6000.writeCfgRegister(0x41, 0x20);
+            C6000.writeCfgRegister(0x41, 0x00);
+            C6000.writeCfgRegister(0x41, 0x40);
+            C6000.writeCfgRegister(0x40, 0x43);
+            dmrSlotMode = mode;
+        }
+    }
 #endif
 
     // RSSI interpolation curve
