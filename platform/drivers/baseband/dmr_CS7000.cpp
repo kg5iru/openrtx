@@ -549,6 +549,7 @@ static bool txTcOn = false;             // the local TC bit runs
 static uint32_t txAlignIrqs = 0;        // slot interrupts before the header
 static uint32_t txTcHist = 0;           // TC bits read before the transmission
 static uint8_t txCsbk[12];
+static uint8_t txWakeLeft = 0;          // wake-up CSBKs still to send
 static bool txIsWake = false;           // the transmission is a wake-up
 
 static void tcUpdate(TcTrack *t, uint8_t bit)
@@ -704,7 +705,7 @@ static void handleSlot()
                 break;
             case TX_WAKE_SENT:
                 C6000.writeCfgRegister(0x41, 0x00);
-                txState = TX_DONE;
+                txState = (--txWakeLeft > 0) ? TX_WAKE : TX_DONE;
                 break;
             case TX_ALIGN:
                 txAlignIrqs++;
@@ -1107,6 +1108,9 @@ void dmr_startWakeup(uint32_t src)
      * the source ID, as the owner's Anytone sends it (v48 off-air capture:
      * b8 00 00 00 ff ff ff + ID); the chip adds the CRC.  Sent in active
      * mode (0xE3, as OpenGD77 sends its wake-up) on the relay mode set.
+     * Twice, 60 ms apart, as the Anytone does: its first one did not
+     * decode off air (v48 capture), and in v49 the CS7000's single
+     * wake-up went unanswered on 2 of 5 calls, the second one never.
      */
     txCsbk[0] = 0xB8;
     txCsbk[1] = 0x00;
@@ -1125,6 +1129,7 @@ void dmr_startWakeup(uint32_t src)
     txTimeslot = 0;
     tcReset(&tc);
     txIsWake = true;
+    txWakeLeft = 2;
     C6000.writeCfgRegister(0x40, 0xE3);
     txState = TX_WAKE;
 }

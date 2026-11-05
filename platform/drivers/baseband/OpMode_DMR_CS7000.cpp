@@ -28,8 +28,9 @@ static constexpr uint32_t DEFAULT_TX_TG = 9;
  * hotspot repeated the owner's Anytone but not the CS7000.  Off air, the
  * Anytone sends a CSBK BS_Dwn_Act on the hotspot input, waits about 0.6 s,
  * then sends its call in step with the hotspot's slots; the CS7000 sent its
- * call at once on its own timing.  Like OpenGD77: one wake-up, up to 600 ms
- * for the repeater's signal, 3 tries.
+ * call at once on its own timing.  A wake-up (two CSBKs, as the Anytone
+ * sends), then up to 600 ms for the repeater's signal, 3 tries (OpenGD77).
+ * Skipped when the repeater is already on the air.
  */
 enum : uint8_t { WAKE_NONE = 0, WAKE_SENDING, WAKE_WAITING };
 static constexpr uint8_t WAKE_WAIT_TICKS = 20; // 600 ms
@@ -152,6 +153,8 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
             wakeStart = getTick();
             startWakeup(status);
         } else {
+            if (status->dmrTimeslot != 0)
+                LOG_I("dmr", "repeater on the air: no wake-up");
             startTx(status);
         }
     }
@@ -282,11 +285,11 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt)
     wakeTicks++;
 
     if (wakePhase == WAKE_SENDING) {
-        // The CSBK goes out within two slots; back to receive after it
-        if (!dmr_txDone() && (wakeTicks < 5))
+        // The two CSBKs go out within four slots; back to receive after them
+        if (!dmr_txDone() && (wakeTicks < 8))
             return;
         if (!dmr_txDone())
-            LOG_W("dmr", "wake-up not sent within 150 ms");
+            LOG_W("dmr", "wake-up not sent within 240 ms");
         dmr_endTx(0);
         radio_disableRtx();
         radio_enableRx();
