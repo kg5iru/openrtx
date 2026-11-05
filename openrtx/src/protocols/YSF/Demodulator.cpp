@@ -245,6 +245,7 @@ void Demodulator::syncFailed()
         devEstimator = held.devEstimator;
         realigning = false;
         state = State::LOCKED;
+        symbolStep(); // this sample went to the attempt
         return;
     }
 
@@ -287,7 +288,13 @@ void Demodulator::lockedState(const int16_t sample)
      * peak is a sync word.
      */
     int32_t thresh = static_cast<int32_t>(corrThreshold * 58.0f);
-    if (sync.update(correlator, thresh, -thresh) > 0) {
+    bool peak = (sync.update(correlator, thresh, -thresh) > 0);
+
+    symbolStep();
+    if (state != State::LOCKED)
+        return; // frame completed
+
+    if (peak) {
         size_t idx = frameIndex;
         bool current = ((idx + 3) >= SYNC_SYMBOLS)
                     && (idx <= (SYNC_SYMBOLS + 3));
@@ -304,12 +311,19 @@ void Demodulator::lockedState(const int16_t sample)
             samplingPoint = sync.samplingIndex();
             realigning = true;
             state = State::SYNCED;
-            return;
         }
     }
+}
 
-    // Symbols are taken two samples after their base sampling point, from
-    // the four samples around it (see trackTiming)
+/*
+ * One sample of the lock: a symbol is taken two samples after its base
+ * sampling point, from the four samples around it (see trackTiming).  Every
+ * sample of a lock goes through here, whatever state handles it, so that
+ * none is lost and none is taken twice: a symbol lost or taken twice slips
+ * the rest of the frame.
+ */
+void Demodulator::symbolStep()
+{
     if (sampleIndex != ((samplingPoint + 2) % SAMPLES_PER_SYMBOL))
         return;
 
@@ -343,6 +357,13 @@ void Demodulator::syncUpdateState()
      */
     const frame_t &ready = frames[demodIdx ^ 1];
     uint8_t errs = syncBitErrors(ready);
+
+    /*
+     * This sample follows the frame's last symbol: it is not a symbol, but
+     * if the timing moved later on that symbol it is the one to skip (see
+     * trackTiming).  Left set, the skip would drop the next real symbol.
+     */
+    skipNext = false;
     bool valid = (errs <= SYNC_ERRORS);
     syncErrors = errs;
 

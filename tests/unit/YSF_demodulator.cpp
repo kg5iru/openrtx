@@ -295,3 +295,23 @@ TEST_CASE("YSF demodulator: realigns at once when the frame timing jumps",
     REQUIRE(exact >= 18);
     REQUIRE_FALSE(unlocked);
 }
+
+TEST_CASE("YSF demodulator: long call, no symbol slip", "[ysf]")
+{
+    /*
+     * With the symbol timing drifting (clock error), the sampling base moves
+     * now and then; a move on the last symbol of a frame once left the skip
+     * of the duplicate sample pending over the frame boundary, and the next
+     * frame lost a symbol: every frame after it was misaligned until the
+     * lock was lost.
+     */
+    for (int seed = 0; seed < 4; seed++) {
+        std::mt19937 rng(50 + seed);
+        auto tx = transmit(300, rng, 3000.0, 0.0, 0.0, false, 0,
+                           20.0 + (25.0 * seed));
+        auto r = receive(tx);
+        INFO("seed " << seed << ": frames " << r.frames << ", exact "
+                     << r.exact);
+        CHECK(r.frames >= 299);
+    }
+}
