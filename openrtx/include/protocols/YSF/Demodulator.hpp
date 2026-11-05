@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdlib>
 #include <array>
-#include "core/dsp.h"
 #include "core/fir.hpp"
 #include "core/iir.hpp"
 #include "protocols/M17/Correlator.hpp"
@@ -109,6 +108,7 @@ public:
     static constexpr uint8_t SYNC_ERRORS_ACQ = 2; ///< To acquire a lock
     static constexpr uint8_t SYNC_ERRORS = 5;     ///< To keep it
     static constexpr uint8_t MAX_MISSED = 4;      ///< Syncs, 400 ms
+    static constexpr float DC_GAIN = 1.0f / 2048.0f;
     static constexpr float TIMING_GAIN = 0.01f;
 
 private:
@@ -162,7 +162,7 @@ private:
     } held;
     uint32_t initCount;
     float corrThreshold;
-    struct dcBlock dcBlock;
+    float dcLevel; ///< Slow DC estimate, see sample()
 
     Fir<std::tuple_size<decltype(rrc_taps_24k)>::value> rrc;
     Correlator<SYNC_SYMBOLS, SAMPLES_PER_SYMBOL> correlator;
