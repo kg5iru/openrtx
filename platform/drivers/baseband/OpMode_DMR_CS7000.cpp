@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <stdio.h>
 #include <string.h>
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
