@@ -13,6 +13,9 @@
 #include "drivers/baseband/dmr_diag_CS7000.h"
 #include "drivers/baseband/ysf_CS7000.h"
 #include "protocols/YSF/FrameEncoder.hpp"
+#ifdef CONFIG_P25
+#include "protocols/YSF/VoiceFR.hpp"
+#endif
 #include "OpMode_YSF_CS7000.hpp"
 
 using namespace YSF;
@@ -92,6 +95,7 @@ OpMode_YSF::OpMode_YSF()
     , txFrames(0)
     , txSilence(0)
     , txStart(0)
+    , txVw(false)
 {
 }
 
@@ -297,11 +301,14 @@ void OpMode_YSF::processFrame(const frame_t &frame)
         callBadFich++;
         bool aligned = (demod->lastSyncErrors() <= 2);
         bool voice = (lastDt == DT_VD_MODE2) || (lastDt == DT_VD_MODE1);
+#ifdef CONFIG_P25
+        voice = voice || (lastDt == DT_VOICE_FR);
+#endif
         if (aligned && voice && (flywheel < 2)) {
             flywheel++;
             callFlywheel++;
             callFrames++;
-            pushVoice(frame, lastDt);
+            pushVoice(frame, lastDt, nullptr);
         } else if (framesSinceGood >= 5) {
             endCall("no valid FICH");
         }
@@ -376,7 +383,7 @@ void OpMode_YSF::processFrame(const frame_t &frame)
                 else if (fich.fn() == 1)
                     callsignToString(dch.data(), callInfo.src);
             }
-            pushVoice(frame, DT_VD_MODE2);
+            pushVoice(frame, DT_VD_MODE2, &fich);
             break;
         }
 
@@ -386,18 +393,47 @@ void OpMode_YSF::processFrame(const frame_t &frame)
                 setDestination(&dch[0], callInfo.dst);
                 callsignToString(&dch[10], callInfo.src);
             }
-            pushVoice(frame, DT_VD_MODE1);
+            pushVoice(frame, DT_VD_MODE1, &fich);
             break;
         }
 
+#ifdef CONFIG_P25
+        case DT_VOICE_FR:
+            // Voice full rate (VW): IMBE, through the P25 vocoder
+            pushVoice(frame, DT_VOICE_FR, &fich);
+            break;
+#endif
+
         default:
-            // Voice full rate (VW, IMBE) and data full rate: no voice here
+            // Data full rate (and VW without the P25 vocoder): no voice
             break;
     }
 }
 
-void OpMode_YSF::pushVoice(const frame_t &frame, const uint8_t dt)
+/*
+ * The voice frames of a communications frame, to the speaker queue.  fich is
+ * null for a frame decoded on the last valid FICH: a VW frame is then taken
+ * as five voice frames.
+ */
+void OpMode_YSF::pushVoice(const frame_t &frame, const uint8_t dt,
+                           const Fich *fich)
 {
+#ifdef CONFIG_P25
+    if (dt == DT_VOICE_FR) {
+        Fich five = makeFich(FI_COMMUNICATIONS, 1, TX_FRAME_TOTAL, dt, 0);
+        const Fich &f = (fich != nullptr) ? *fich : five;
+        for (size_t k = 0; k < vwVoiceFrames(f); k++) {
+            uint8_t imbe[IMBE_BYTES];
+            vwVoiceToImbe(frame, f, k, imbe);
+            if (!dmrAudio_pushImbe(imbe))
+                callDropped++;
+        }
+        return;
+    }
+#else
+    (void)fich;
+#endif
+
     uint8_t ambe[9];
     for (size_t n = 0; n < 5; n++) {
         if (dt == DT_VD_MODE2)
@@ -421,7 +457,15 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
     dmrDiag_startWatchdog();
     dmrDiag_txStart();
 
-    if (!dmrAudio_startTx(status->dmrMicGain)) {
+#ifdef CONFIG_P25
+    txVw = status->ysfTxVw;
+    bool encoder = txVw ? dmrAudio_startTxImbe(status->dmrMicGain) :
+                          dmrAudio_startTx(status->dmrMicGain);
+#else
+    txVw = false;
+    bool encoder = dmrAudio_startTx(status->dmrMicGain);
+#endif
+    if (!encoder) {
         LOG_W("ysf", "PTT: no voice encoder (codec missing or damaged)");
         dmrDiag_txEnd();
         startRx();
@@ -469,8 +513,8 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
     char src[11], dst[11];
     callsignToString(txSrc, src);
     callsignToString(txDst, dst);
-    LOG_I("ysf", "tx start: %s > %s, DG-ID %u, DN", src, toAll ? "ALL" : dst,
-          txDgid);
+    LOG_I("ysf", "tx start: %s > %s, DG-ID %u, %s", src, toAll ? "ALL" : dst,
+          txDgid, txVw ? "VW" : "DN");
 
     modulator->sendPreamble();
     sendControlFrame(FI_HEADER);
@@ -486,14 +530,38 @@ void OpMode_YSF::sendControlFrame(const uint8_t fi)
 
     frame_t frame{};
     encodeSync(frame);
-    encodeFich(makeFich(fi, 0, TX_FRAME_TOTAL, DT_VD_MODE2, txDgid, txCm),
-               frame);
+    encodeFich(makeFich(fi, 0, TX_FRAME_TOTAL, txDt(), txDgid, txCm), frame);
     encodeCsd(csd1, csd2, frame);
     modulator->sendFrame(frame);
 }
 
+uint8_t OpMode_YSF::txDt() const
+{
+    return txVw ? DT_VOICE_FR : DT_VD_MODE2;
+}
+
 void OpMode_YSF::sendVoiceFrame()
 {
+    frame_t frame{};
+    encodeSync(frame);
+    encodeFich(makeFich(FI_COMMUNICATIONS, txFn, TX_FRAME_TOTAL, txDt(), txDgid,
+                        txCm),
+               frame);
+
+#ifdef CONFIG_P25
+    if (txVw) {
+        // Voice full rate: five IMBE frames, no data channel (as YSF2P25)
+        for (size_t n = 0; n < 5; n++) {
+            uint8_t imbe[IMBE_BYTES];
+            if (!dmrAudio_popTxImbe(imbe)) // silence if none
+                txSilence++;
+            encodeVwVoice(imbe, n, frame);
+        }
+        sendCommunications(frame);
+        return;
+    }
+#endif
+
     uint8_t dch[10];
     if (txFn == 0)
         memcpy(dch, txDst, sizeof(dch));
@@ -502,11 +570,6 @@ void OpMode_YSF::sendVoiceFrame()
     else
         memset(dch, ' ', sizeof(dch));
 
-    frame_t frame{};
-    encodeSync(frame);
-    encodeFich(makeFich(FI_COMMUNICATIONS, txFn, TX_FRAME_TOTAL, DT_VD_MODE2,
-                        txDgid, txCm),
-               frame);
     encodeVd2Dch(dch, frame);
 
     for (size_t n = 0; n < 5; n++) {
@@ -516,6 +579,11 @@ void OpMode_YSF::sendVoiceFrame()
         encodeVd2Voice(ambe, n, frame);
     }
 
+    sendCommunications(frame);
+}
+
+void OpMode_YSF::sendCommunications(const frame_t &frame)
+{
     modulator->sendFrame(frame);
     txFn = (txFn + 1) % (TX_FRAME_TOTAL + 1);
     txFrames++;

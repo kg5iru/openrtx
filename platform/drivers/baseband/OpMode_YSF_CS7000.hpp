@@ -45,10 +45,13 @@ private:
     void stopRx();
     void processFrame(const YSF::frame_t &frame);
     void startCall();
-    void pushVoice(const YSF::frame_t &frame, const uint8_t dt);
+    void pushVoice(const YSF::frame_t &frame, const uint8_t dt,
+                   const YSF::Fich *fich);
     void endCall(const char *why);
     void startTx(rtxStatus_t *const status);
     void sendVoiceFrame();
+    void sendCommunications(const YSF::frame_t &frame);
+    uint8_t txDt() const;
     void sendControlFrame(const uint8_t fi);
     void endTx(rtxStatus_t *const status);
 
@@ -77,6 +80,7 @@ private:
     uint8_t txDst[10];  ///< Destination callsign, or ten asterisks for all
     uint8_t txCm;       ///< Call mode: group (to all) or individual
     uint8_t txDgid;     ///< DG-ID sent
+    bool txVw;          ///< Voice full rate (IMBE) rather than DN
     std::unique_ptr<YSF::Modulator> modulator;
 };
 
