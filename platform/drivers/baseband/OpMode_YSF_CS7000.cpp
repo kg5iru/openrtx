@@ -10,6 +10,7 @@
 #include "interfaces/delays.h"
 #include "core/log.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
+#include "drivers/baseband/dmr_diag_CS7000.h"
 #include "drivers/baseband/ysf_CS7000.h"
 #include "protocols/YSF/FrameEncoder.hpp"
 #include "OpMode_YSF_CS7000.hpp"
@@ -92,6 +93,8 @@ OpMode_YSF::~OpMode_YSF()
 
 void OpMode_YSF::enable()
 {
+    // Reports a transmission cut short by a reset, then arms the breadcrumbs
+    dmrDiag_init();
     basebandBuf = std::make_unique<int16_t[]>(2 * BB_HALF);
     demod = std::make_unique<Demodulator>();
     decoder = std::make_unique<FrameDecoder>();
@@ -109,12 +112,15 @@ void OpMode_YSF::disable()
     platform_ledOff(RED);
 
     if (transmitting) {
+        LOG_W("ysf", "tx cut short by a mode or channel change: %lu frames",
+              (unsigned long)txFrames);
         dmrAudio_stopTx();
         if (micPath >= 0)
             audioPath_release(micPath);
         micPath = -1;
         modulator.reset();
         transmitting = false;
+        dmrDiag_txEnd();
     }
 
     stopRx();
@@ -419,15 +425,22 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
         audioOn = false;
     }
 
+    // As for DMR: a stall of the RTX thread resets the radio, and a reset
+    // during the transmission is reported at the next start
+    dmrDiag_startWatchdog();
+    dmrDiag_txStart();
+
     micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
     if (!dmrAudio_startTx(micPath, status->dmrMicGain)) {
         LOG_W("ysf", "PTT: no voice encoder (codec missing or damaged)");
         if (micPath >= 0)
             audioPath_release(micPath);
         micPath = -1;
+        dmrDiag_txEnd();
         startRx();
         return;
     }
+    dmrDiag_set(DIAG_STAGE, STAGE_ENCODER);
 
     // Own callsign, upper case, padded with spaces
     bool end = false;
@@ -442,6 +455,7 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
 
     modulator = std::make_unique<Modulator>();
     modulator->init();
+    modulator->invertPhase(true); // as OpMode_M17 does on the CS7000
     radio_disableRtx();
     radio_enableTx();
     if (!modulator->start()) {
@@ -452,9 +466,11 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
         if (micPath >= 0)
             audioPath_release(micPath);
         micPath = -1;
+        dmrDiag_txEnd();
         startRx();
         return;
     }
+    dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
 
     status->opStatus = TX;
     transmitting = true;
@@ -516,10 +532,12 @@ void OpMode_YSF::sendVoiceFrame()
     modulator->sendFrame(frame);
     txFn = (txFn + 1) % (TX_FRAME_TOTAL + 1);
     txFrames++;
+    dmrDiag_inc(DIAG_BEAT);
 }
 
 void OpMode_YSF::endTx(rtxStatus_t *const status)
 {
+    dmrDiag_set(DIAG_STAGE, STAGE_TERM);
     sendControlFrame(FI_TERMINATOR);
     modulator->stop(); // returns once the terminator has gone out
 
@@ -530,6 +548,7 @@ void OpMode_YSF::endTx(rtxStatus_t *const status)
     modulator.reset();
 
     radio_disableRtx();
+    dmrDiag_txEnd();
     LOG_I("ysf", "tx end: %lu frames, %lu voice frames sent as silence, %lu ms",
           (unsigned long)txFrames, (unsigned long)txSilence,
           (unsigned long)(getTick() - txStart));
