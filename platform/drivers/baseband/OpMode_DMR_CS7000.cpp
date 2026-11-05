@@ -66,9 +66,13 @@ static size_t buildPosition(uint8_t *out, size_t max, uint16_t ipId)
     if ((course < 0) || (course > 359))
         course = 0;
 
+    /*
+     * The integer-only sniprintf, which the log and the menus already use:
+     * snprintf alone pulled in the floating point printf (5 kB).
+     */
     char *s = (char *)&out[9];
     size_t room = max - 9 - 6; // room for the checksum and CR LF
-    int n = snprintf(
+    int n = sniprintf(
         s, room,
         "$GPRMC,%02d%02d%02d.000,A,%02lu%02lu.%05lu,%c,"
         "%03lu%02lu.%05lu,%c,%lu.%02lu,%d.00,%02d%02d%02d,,,A",
@@ -85,7 +89,7 @@ static size_t buildPosition(uint8_t *out, size_t max, uint16_t ipId)
     uint8_t cs = 0;
     for (int i = 1; i < n; i++)
         cs ^= (uint8_t)s[i];
-    n += snprintf(&s[n], 6, "*%02X\r\n", cs);
+    n += sniprintf(&s[n], 6, "*%02X\r\n", cs);
     return 9 + (size_t)n;
 }
 
