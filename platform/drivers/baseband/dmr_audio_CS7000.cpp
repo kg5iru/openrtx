@@ -31,30 +31,40 @@
 #include "hwconfig.h"
 
 /*
- * Queue of AMBE+2 frames, 9 bytes each in DMR layout, for a single producer
- * and a single consumer (an interrupt may be either).
+ * Voice frame lengths, which also tell the vocoders apart: AMBE+2 (DMR, YSF
+ * DN, 9 bytes in DMR layout) or IMBE (YSF VW, 11 bytes).
+ */
+static constexpr uint8_t AMBE_BYTES = 9;
+static constexpr uint8_t IMBE_BYTES = 11;
+
+/*
+ * Queue of voice frames for a single producer and a single consumer (an
+ * interrupt may be either).
  */
 template <unsigned N>
 class FrameQueue
 {
 public:
-    bool push(const uint8_t frame[9])
+    bool push(const uint8_t *frame, const uint8_t len)
     {
         unsigned next = (head + 1) % N;
         if (next == tail)
             return false;
-        memcpy(frames[head], frame, 9);
+        memcpy(frames[head], frame, len);
+        lens[head] = len;
         head = next;
         return true;
     }
 
-    bool pop(uint8_t frame[9])
+    // Returns the frame length, 0 when the queue is empty
+    uint8_t pop(uint8_t frame[IMBE_BYTES])
     {
         if (tail == head)
-            return false;
-        memcpy(frame, frames[tail], 9);
+            return 0;
+        uint8_t len = lens[tail];
+        memcpy(frame, frames[tail], len);
         tail = (tail + 1) % N;
-        return true;
+        return len;
     }
 
     unsigned count() const
@@ -70,7 +80,8 @@ public:
 
 private:
     // Every member initialised: a static queue needs no startup constructor
-    uint8_t frames[N][9] = {};
+    uint8_t frames[N][IMBE_BYTES] = {};
+    uint8_t lens[N] = {};
     volatile unsigned head = 0; // written by the producer
     volatile unsigned tail = 0; // written by the consumer
 };
@@ -87,13 +98,16 @@ static FrameQueue<32> rxQueue;
  */
 static FrameQueue<16> txQueue;
 
-// AMBE+2 silence, sent when the encoder has no frame ready
-static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
-                                        0x73, 0x00, 0x2A, 0x6B };
+// Silence frames, sent when the encoder has no frame ready
+static const uint8_t ambeSilence[AMBE_BYTES] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
+                                                 0x73, 0x00, 0x2A, 0x6B };
+static const uint8_t imbeSilence[IMBE_BYTES] = { 0x04, 0x0C, 0xFD, 0x7B,
+                                                 0xFB, 0x7D, 0xF2, 0x7B,
+                                                 0x3D, 0x9E, 0x44 };
 
 bool dmrAudio_pushFrame(const uint8_t frame[9])
 {
-    return rxQueue.push(frame);
+    return rxQueue.push(frame, AMBE_BYTES);
 }
 
 unsigned dmrAudio_queued()
@@ -101,13 +115,34 @@ unsigned dmrAudio_queued()
     return rxQueue.count();
 }
 
-bool dmrAudio_popTxFrame(uint8_t frame[9])
+// Next encoded frame, or silence of the given length if none is ready
+static bool popTx(uint8_t *frame, const uint8_t len, const uint8_t *silence)
 {
-    if (txQueue.pop(frame))
+    uint8_t buf[IMBE_BYTES];
+    if (txQueue.pop(buf) == len) {
+        memcpy(frame, buf, len);
         return true;
-    memcpy(frame, ambeSilence, sizeof(ambeSilence));
+    }
+    memcpy(frame, silence, len);
     return false;
 }
+
+bool dmrAudio_popTxFrame(uint8_t frame[9])
+{
+    return popTx(frame, AMBE_BYTES, ambeSilence);
+}
+
+#ifdef CONFIG_P25
+bool dmrAudio_pushImbe(const uint8_t frame[11])
+{
+    return rxQueue.push(frame, IMBE_BYTES);
+}
+
+bool dmrAudio_popTxImbe(uint8_t frame[11])
+{
+    return popTx(frame, IMBE_BYTES, imbeSilence);
+}
+#endif
 
 static bool audioStart(const pathId path);
 static void audioStop();
@@ -173,6 +208,18 @@ static bool startThread(pthread_t *t, void *(*fn)(void *))
 }
 
 static ambe_cs7000_t decoder; /* ~10 kB, too big for the stack */
+
+#ifdef CONFIG_P25
+/*
+ * IMBE (YSF VW) through the P25 vocoder engine: one decoder and one encoder
+ * state, apart from the P25 mode's own, as both directions run in the threads
+ * here.  Sizes from imbe_embedded (decoder 1932 B, encoder 8608 B), checked
+ * at initialisation.
+ */
+#include <imbe2.h>
+alignas(8) static uint8_t imbeDec[2048];
+alignas(8) static uint8_t imbeEnc[8704];
+#endif
 static pthread_t thread;
 static volatile bool running = false;
 static volatile bool reqStop = false;
@@ -203,10 +250,13 @@ static void *decodeThread(void *arg)
     // fault in the codec and a fault in the audio stream can be told apart
     // on the radio (a crash with no DMR traffic is not the codec).
     bool codecReady = false;
+#ifdef CONFIG_P25
+    bool imbeReady = false;
+#endif
     bool playing = false;
     uint8_t sinceFrame = 255; // 20 ms buffers since the last frame played
 
-    uint8_t frame[9];
+    uint8_t frame[IMBE_BYTES];
 
     // Avoid writing to the buffer while the stream is reading it.
     outputStream_sync(oStream, false);
@@ -220,7 +270,8 @@ static void *decodeThread(void *arg)
         // queued, so that the bursty arrival does not insert silence.
         if (!playing && rxQueue.count() >= 6)
             playing = true;
-        bool have = playing && rxQueue.pop(frame);
+        uint8_t len = playing ? rxQueue.pop(frame) : 0;
+        bool have = (len != 0);
         if (playing && !have)
             playing = false;
 
@@ -228,16 +279,32 @@ static void *decodeThread(void *arg)
         if (buf == NULL)
             break;
 
-        if (have && !codecReady) {
+#ifdef CONFIG_P25
+        if (len == IMBE_BYTES) {
+            if (!imbeReady && (imbe2_decoder_state_size() <= sizeof(imbeDec))) {
+                imbe2_decoder_init(imbeDec);
+                imbeReady = true;
+            }
+            if (imbeReady)
+                imbe2_decode(imbeDec, buf, frame);
+            else
+                memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
+        }
+#endif
+
+        if ((len == AMBE_BYTES) && !codecReady) {
             ambe_cs7000_init(&decoder);
             codecReady = true;
         }
 
-        if (have) {
+        if (len == AMBE_BYTES) {
             int e = ambe_cs7000_decode(&decoder, frame, buf);
             errTotal += (unsigned)e;
             if (e >= 4)
                 badFrames++;
+        }
+
+        if (have) {
             framesDecoded++;
             /*
              * Frames resumed after running dry for less than 300 ms: those
@@ -315,12 +382,32 @@ static void testVowel(int16_t *pcm, uint32_t frame)
 }
 
 static pathId txMicPath = -1;
+static bool txImbe = false; // IMBE (YSF VW) rather than AMBE+2
+
+// One 20 ms frame through the vocoder chosen, into the TX queue
+static bool encodeFrame(const int16_t *pcm)
+{
+    uint8_t frame[IMBE_BYTES];
+    uint8_t len = AMBE_BYTES;
+
+    dmrDiag_set(DIAG_ENC, txFramesEncoded | 0x80000000u);
+#ifdef CONFIG_P25
+    if (txImbe) {
+        imbe2_encode(imbeEnc, frame, pcm);
+        len = IMBE_BYTES;
+    } else
+#endif
+        ambe_cs7000_encode(&encoder, pcm, frame);
+    txFramesEncoded++;
+    dmrDiag_set(DIAG_ENC, txFramesEncoded);
+
+    return txQueue.push(frame, len);
+}
 
 // Bring-up test signal: frames paced by the TX queue (4 frames ahead)
 static void encodeVowel()
 {
     static int16_t pcm[FRAME_SAMPLES];
-    uint8_t frame[9];
 
     while (!txReqStop) {
         if (txQueue.count() >= 4) {
@@ -329,13 +416,7 @@ static void encodeVowel()
         }
 
         testVowel(pcm, txFramesEncoded);
-
-        dmrDiag_set(DIAG_ENC, txFramesEncoded | 0x80000000u);
-        ambe_cs7000_encode(&encoder, pcm, frame);
-        txFramesEncoded++;
-        dmrDiag_set(DIAG_ENC, txFramesEncoded);
-
-        txQueue.push(frame);
+        encodeFrame(pcm);
     }
 }
 
@@ -378,7 +459,6 @@ static void encodeMic()
     dsp_resetState(decimator);
 
     static int16_t pcm[FRAME_SAMPLES];
-    uint8_t frame[9];
 
     while (!txReqStop) {
         if (audioPath_getStatus(txMicPath) != PATH_OPEN)
@@ -415,12 +495,7 @@ static void encodeMic()
         while (n < FRAME_SAMPLES)
             pcm[n++] = 0;
 
-        dmrDiag_set(DIAG_ENC, txFramesEncoded | 0x80000000u);
-        ambe_cs7000_encode(&encoder, pcm, frame);
-        txFramesEncoded++;
-        dmrDiag_set(DIAG_ENC, txFramesEncoded);
-
-        if (!txQueue.push(frame))
+        if (!encodeFrame(pcm))
             txDropped++;
     }
 
@@ -432,16 +507,27 @@ static void *encodeThread(void *arg)
 {
     (void)arg;
 
-    ambe_cs7000_init(&encoder);
+#ifdef CONFIG_P25
+    if (txImbe) {
+        if (imbe2_encoder_state_size() > sizeof(imbeEnc)) {
+            LOG_E("ambe", "IMBE encoder state too large");
+            txRunning = false;
+            return NULL;
+        }
+        imbe2_encoder_init(imbeEnc);
+    } else
+#endif
+        ambe_cs7000_init(&encoder);
     txFramesEncoded = 0;
     txDropped = 0;
     txPeak = 0;
 
+    const char *vocoder = txImbe ? "IMBE" : "AMBE+2";
     if (txMicPath >= 0) {
-        LOG_I("ambe", "encode thread started (microphone)");
+        LOG_I("ambe", "encode thread started (microphone, %s)", vocoder);
         encodeMic();
     } else {
-        LOG_I("ambe", "encode thread started (test vowel)");
+        LOG_I("ambe", "encode thread started (test vowel, %s)", vocoder);
         encodeVowel();
     }
 
@@ -454,10 +540,12 @@ static void *encodeThread(void *arg)
     return NULL;
 }
 
-bool dmrAudio_startTx(const uint8_t gainStep)
+static bool startTx(const uint8_t gainStep, const bool imbe)
 {
     if (txRunning || (dmrAudio_codecStatus() != DMR_CODEC_OK))
         return false;
+
+    txImbe = imbe;
 
     txMicPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
     if (txMicPath < 0)
@@ -481,6 +569,18 @@ bool dmrAudio_startTx(const uint8_t gainStep)
 
     return true;
 }
+
+bool dmrAudio_startTx(const uint8_t gainStep)
+{
+    return startTx(gainStep, false);
+}
+
+#ifdef CONFIG_P25
+bool dmrAudio_startTxImbe(const uint8_t gainStep)
+{
+    return startTx(gainStep, true);
+}
+#endif
 
 void dmrAudio_stopTx()
 {
@@ -566,6 +666,14 @@ bool dmrAudio_startTx(const uint8_t gainStep)
     (void)gainStep;
     return false;
 }
+
+#ifdef CONFIG_P25
+bool dmrAudio_startTxImbe(const uint8_t gainStep)
+{
+    (void)gainStep;
+    return false;
+}
+#endif
 
 void dmrAudio_stopTx()
 {

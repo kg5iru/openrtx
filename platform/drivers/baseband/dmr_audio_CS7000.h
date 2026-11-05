@@ -68,6 +68,23 @@ void dmrAudio_stopTx();
  */
 bool dmrAudio_popTxFrame(uint8_t frame[9]);
 
+#ifdef CONFIG_P25
+/*
+ * IMBE voice (YSF voice full rate, VW), through the P25 vocoder engine and the
+ * same queues, threads and speaker squelch as AMBE+2.  Frames are 11 bytes
+ * (88 bits).
+ */
+
+/** Queue one received IMBE frame for playback; false if the queue is full. */
+bool dmrAudio_pushImbe(const uint8_t frame[11]);
+
+/** As dmrAudio_startTx(), encoding IMBE frames. */
+bool dmrAudio_startTxImbe(const uint8_t gainStep);
+
+/** As dmrAudio_popTxFrame(), for IMBE frames (IMBE silence when none). */
+bool dmrAudio_popTxImbe(uint8_t frame[11]);
+#endif
+
 #define DMR_CODEC_OK 0      ///< codec region present and intact
 #define DMR_CODEC_MISSING 1 ///< built without the codec, or region erased
 #define DMR_CODEC_DAMAGED 2 ///< region present but its checksums differ
