@@ -70,9 +70,15 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot);
 
 /**
  * @return true when the receiver follows a repeater's signal: the CACH
- * timeslot bit has alternated on the last slots.  Only with a timeslot set.
+ * timeslot bit has alternated on the last slots, a burst was received in the
+ * last few slots and slot interrupts still come.  Only with a timeslot set.
+ * To be called at every update (30 ms) of the RTX thread, which is what
+ * tells whether slot interrupts still come.
  */
 bool dmr_bsLocked();
+
+/** @return true while a transmission through a repeater waits for its slot. */
+bool dmr_txAligning();
 
 /**
  * Send one repeater wake-up (CSBK BS_Dwn_Act, as an HT sends before its

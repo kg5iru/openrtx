@@ -549,8 +549,19 @@ static bool txTcOn = false;             // the local TC bit runs
 static uint32_t txAlignIrqs = 0;        // slot interrupts before the header
 static uint32_t txTcHist = 0;           // TC bits read before the transmission
 static uint8_t txCsbk[12];
-static uint8_t txWakeLeft = 0;          // wake-up CSBKs still to send
-static bool txIsWake = false;           // the transmission is a wake-up
+/*
+ * Freshness of the repeater lock.  The TC bit is only followed while slot
+ * interrupts come, so a lock could outlive the repeater's signal (v50 on air:
+ * a PTT press found the repeater "on the air" and the transmission never
+ * started).  The lock also needs a system interrupt (a received burst) in
+ * the last few slots, and slot interrupts still coming (checked from the RTX
+ * thread, see dmr_bsLocked()).
+ */
+static volatile uint8_t slotsSinceSys = 255;
+static uint32_t lockCheckIrqs = 0; // rxSlotIrqsTotal at the last check
+static uint8_t lockStale = 255;    // checks in a row without a slot interrupt
+static uint8_t txWakeLeft = 0;     // wake-up CSBKs still to send
+static bool txIsWake = false;      // the transmission is a wake-up
 
 static void tcUpdate(TcTrack *t, uint8_t bit)
 {
@@ -588,6 +599,8 @@ static inline bool tcLocked(const TcTrack *t)
 // Slot interrupt while receiving with a timeslot set
 static void trackTc()
 {
+    if (slotsSinceSys < 255)
+        slotsSinceSys++;
     (void)C6000.readCfgRegister(0x50);
     (void)C6000.readCfgRegister(0x51);
     tcUpdate(&tc, (C6000.readCfgRegister(0x52) >> 2) & 1);
@@ -905,6 +918,7 @@ static void handleSys()
         return;
     }
 
+    slotsSinceSys = 0;
     last52 = C6000.readCfgRegister(0x52);
     uint8_t reg51 = C6000.readCfgRegister(0x51);
     (void)C6000.readCfgRegister(0x5F);
@@ -1095,7 +1109,20 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
 
 bool dmr_bsLocked()
 {
-    return (rxTimeslot != 0) && tcLocked(&tc);
+    uint32_t irqs = rxSlotIrqsTotal;
+    if (irqs != lockCheckIrqs)
+        lockStale = 0;
+    else if (lockStale < 255)
+        lockStale++;
+    lockCheckIrqs = irqs;
+
+    return (rxTimeslot != 0) && tcLocked(&tc) && (slotsSinceSys <= 4)
+        && (lockStale < 2);
+}
+
+bool dmr_txAligning()
+{
+    return txState == TX_ALIGN;
 }
 
 void dmr_startWakeup(uint32_t src)
@@ -1184,7 +1211,10 @@ void dmr_endTx(uint32_t elapsedMs)
     bool clean = (txState == TX_DONE);
     txState = TX_OFF;
 
-    if ((txTimeslot != 0) && !txIsWake) {
+    // A transmission that never found its slot has lost the repeater
+    bool keepAxis = (txTimeslot != 0) && !txIsWake && (txHeaders != TX_HEADERS);
+
+    if (keepAxis) {
         /*
          * Through a repeater: back to receive without stopping the time
          * axis (0x40 stays 0xC3, as OpenGD77 ends a repeater transmission),

@@ -37,7 +37,8 @@ private:
     void startTx(rtxStatus_t *const status);
     void finishTx(rtxStatus_t *const status);
     void startWakeup(rtxStatus_t *const status);
-    void updateWakeup(rtxStatus_t *const status, const bool ptt);
+    void updateWakeup(rtxStatus_t *const status, const bool ptt,
+                      const bool bsLocked);
 
     bool enterRx;
     bool audioOn;

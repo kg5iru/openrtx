@@ -141,6 +141,10 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     if (!ptt)
         pttHeld = false;
 
+    // Checked at every update: part of the check is that slot interrupts
+    // keep coming between two updates
+    bool bsLocked = !transmitting && dmr_bsLocked();
+
     if (!transmitting && ptt && !pttHeld && (status->opStatus == RX)
         && (wakePhase == WAKE_NONE)) {
         pttHeld = true;
@@ -148,7 +152,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
             LOG_W("dmr", "PTT: transmit disabled on this channel");
         else if (status->dmrRadioId == 0)
             LOG_W("dmr", "PTT: no radio ID set (Settings > DMR)");
-        else if ((status->dmrTimeslot != 0) && !dmr_bsLocked()) {
+        else if ((status->dmrTimeslot != 0) && !bsLocked) {
             wakeTries = 0;
             wakeStart = getTick();
             startWakeup(status);
@@ -160,13 +164,29 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     }
 
     if (wakePhase != WAKE_NONE)
-        updateWakeup(status, ptt);
+        updateWakeup(status, ptt, bsLocked);
 
     if (transmitting) {
         txTicks++;
         dmrDiag_inc(DIAG_BEAT);
         if ((txTicks == 10) && (dmr_txSlotIrqs() == 0))
             dmr_kickTx();
+        /*
+         * Through a repeater, the first header is armed within two slots of
+         * the start.  If it is not after 300 ms the repeater's timing is
+         * gone: wake it up again, the PTT still held.
+         */
+        if ((txTicks == 10) && dmr_txAligning()) {
+            LOG_W("dmr", "repeater slot not found in 300 ms: waking it up");
+            finishTx(status);
+            if (ptt) {
+                wakeTries = 0;
+                wakeStart = getTick();
+                startWakeup(status);
+            }
+            sleepFor(0u, 30u);
+            return;
+        }
         if ((!ptt || (txTicks >= TX_TIMEOUT)) && (stopTick == 0)) {
             dmr_stopTx();
             stopTick = txTicks;
@@ -280,7 +300,8 @@ void OpMode_DMR::startWakeup(rtxStatus_t *const status)
     platform_ledOn(RED);
 }
 
-void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt)
+void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt,
+                              const bool bsLocked)
 {
     wakeTicks++;
 
@@ -306,7 +327,7 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt)
         return;
     }
 
-    if (dmr_bsLocked()) {
+    if (bsLocked) {
         LOG_I("dmr", "repeater answered %lu ms after the first wake-up (%u)",
               (unsigned long)(getTick() - wakeStart), wakeTries);
         wakePhase = WAKE_NONE;
