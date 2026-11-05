@@ -539,6 +539,7 @@ enum : uint8_t {
     TX_ALIGN,     ///< Through a repeater: waiting for the own slot
     TX_DATA,      ///< Data call: next burst of txData to arm
     TX_DATA_END,  ///< Data call: last burst armed
+    TX_DRAIN,     ///< Last burst still going out: slots before TX_DONE
 };
 
 static constexpr uint8_t TX_HEADERS = 3;
@@ -620,7 +621,18 @@ static uint8_t txCsbk[12];
 static volatile uint8_t slotsSinceSys = 255;
 static uint32_t lockCheckIrqs = 0; // rxSlotIrqsTotal at the last check
 static uint8_t lockStale = 255;    // checks in a row without a slot interrupt
-static uint8_t txWakeLeft = 0;     // wake-up CSBKs still to send
+/*
+ * Slot interrupts to wait after the one that follows the last armed burst,
+ * before the transmission is done and the RF chain may be unkeyed.  v56 off
+ * air through the hotspot: the carrier stopped 55 ms after the sync of the
+ * second to last burst, and the last one (data block with the CRC-32, the
+ * second wake-up CSBK, the voice terminator) never went out: in the passive
+ * (repeater) timing a burst armed at a slot interrupt is sent after the
+ * next one.  Two slots of margin, in direct mode too.
+ */
+static constexpr uint8_t TX_DRAIN_SLOTS = 2;
+static uint8_t txDrain = 0;
+static uint8_t txWakeLeft = 0; // wake-up CSBKs still to send
 
 /*
  * Data call (GPS position for APRS), as the owner's Anytone sends it (v55
@@ -738,10 +750,12 @@ static void handleTxSlot()
             C6000.writeCfgRegister(0x22, 0x46);
             C6000.writeCfgRegister(0x21, 0x03);
             C6000.writeCfgRegister(0x41, 0x40);
-            txState = TX_DONE;
+            txDrain = TX_DRAIN_SLOTS;
+            txState = TX_DRAIN;
         } else if (txState == TX_DATA_END) {
             C6000.writeCfgRegister(0x41, 0x00);
-            txState = TX_DONE;
+            txDrain = TX_DRAIN_SLOTS;
+            txState = TX_DRAIN;
         } else {
             C6000.writeCfgRegister(0x41, 0x00);
         }
@@ -812,6 +826,10 @@ static void handleSlot()
         switch (txState) {
             case TX_DONE:
                 break;
+            case TX_DRAIN:
+                if (--txDrain == 0)
+                    txState = TX_DONE;
+                break;
             case TX_WAKE:
                 // CSBK, data type 3 (manual 5.4.4; OpenGD77 wake-up)
                 C6000.writeCfgRegister(0x41, 0x80);
@@ -821,7 +839,12 @@ static void handleSlot()
                 break;
             case TX_WAKE_SENT:
                 C6000.writeCfgRegister(0x41, 0x00);
-                txState = (--txWakeLeft > 0) ? TX_WAKE : TX_DONE;
+                if (--txWakeLeft > 0) {
+                    txState = TX_WAKE;
+                } else {
+                    txDrain = TX_DRAIN_SLOTS;
+                    txState = TX_DRAIN;
+                }
                 break;
             case TX_ALIGN:
                 txAlignIrqs++;

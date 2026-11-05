@@ -472,11 +472,11 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt,
     wakeTicks++;
 
     if (wakePhase == WAKE_SENDING) {
-        // The two CSBKs go out within four slots; back to receive after them
-        if (!dmr_txDone() && (wakeTicks < 8))
+        // The two CSBKs and two slots of margin (six slots), then receive
+        if (!dmr_txDone() && (wakeTicks < 12))
             return;
         if (!dmr_txDone())
-            LOG_W("dmr", "wake-up not sent within 240 ms");
+            LOG_W("dmr", "wake-up not sent within 360 ms");
         dmr_endTx(0);
         radio_disableRtx();
         radio_enableRx();
