@@ -11,9 +11,25 @@
 #include "core/log.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "drivers/baseband/ysf_CS7000.h"
+#include "protocols/YSF/FrameEncoder.hpp"
 #include "OpMode_YSF_CS7000.hpp"
 
 using namespace YSF;
+
+/*
+ * Transmit: V/D mode 2 (DN) voice, as a Yaesu radio sends a call to all:
+ * one frame of preamble, a header frame, communications frames whose data
+ * channel cycles over frame numbers 0..6 (0 destination "**********" = all,
+ * 1 source callsign, the others blank), then a terminator frame.  The FICH
+ * values are those MMDVM's DMR2YSF uses (frame total 6, call sign
+ * information 2, group call, DG-ID 0).  The voice comes from the AMBE+2
+ * encoder of the DMR mode: YSF DN carries the same 49 voice bits without
+ * the DMR protection.  Time-out: 3 minutes (1800 frames).
+ */
+static constexpr uint8_t TX_FRAME_TOTAL = 6;
+static constexpr uint32_t TX_TIMEOUT_FRAMES = 1800;
+static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
+                                        0x73, 0x00, 0x2A, 0x6B };
 
 // Baseband buffer: two halves of 20 ms at 24 kHz, as the M17 mode uses
 static constexpr size_t BB_HALF = Demodulator::RX_SAMPLE_RATE / 50;
@@ -59,6 +75,13 @@ OpMode_YSF::OpMode_YSF()
     , unlockedTicks(0)
     , lastDt(0)
     , flywheel(0)
+    , transmitting(false)
+    , pttHeld(false)
+    , micPath(-1)
+    , txFn(0)
+    , txFrames(0)
+    , txSilence(0)
+    , txStart(0)
 {
 }
 
@@ -76,12 +99,23 @@ void OpMode_YSF::enable()
     enterRx = true;
     rxOn = false;
     audioOn = false;
+    transmitting = false;
+    pttHeld = false;
 }
 
 void OpMode_YSF::disable()
 {
     platform_ledOff(GREEN);
     platform_ledOff(RED);
+
+    if (transmitting) {
+        dmrAudio_stopTx();
+        if (micPath >= 0)
+            audioPath_release(micPath);
+        micPath = -1;
+        modulator.reset();
+        transmitting = false;
+    }
 
     stopRx();
     if (audioOn) {
@@ -137,6 +171,31 @@ void OpMode_YSF::update(rtxStatus_t *const status, const bool newCfg)
         enterRx = false;
     }
 
+    /*
+     * Transmit: a press of the PTT starts one transmission, which sends a
+     * frame (100 ms) per update, paced by the baseband output; releasing
+     * the PTT, or the time-out, sends the terminator.
+     */
+    bool ptt = platform_getPttStatus();
+    if (!ptt)
+        pttHeld = false;
+
+    if (!transmitting && ptt && !pttHeld && (status->opStatus == RX)) {
+        pttHeld = true;
+        if (status->txDisable != 0)
+            LOG_W("ysf", "PTT: transmit disabled on this channel");
+        else
+            startTx(status);
+    }
+
+    if (transmitting) {
+        if (!ptt || (txFrames >= TX_TIMEOUT_FRAMES))
+            endTx(status);
+        else
+            sendVoiceFrame();
+        return;
+    }
+
     if (rxOn && (audioPath_getStatus(basebandPath) == PATH_OPEN)) {
         // Blocks until the next 20 ms of baseband
         dataBlock_t bb = inputStream_getData(basebandId);
@@ -186,8 +245,6 @@ void OpMode_YSF::update(rtxStatus_t *const status, const bool newCfg)
         audioPath_release(speakerPath);
         audioOn = false;
     }
-
-    // Transmit is not implemented: PTT is ignored.
 
     if (rxSquelchOpen())
         platform_ledOn(GREEN);
@@ -349,4 +406,136 @@ void OpMode_YSF::pushVoice(const frame_t &frame, const uint8_t dt)
         if (!dmrAudio_pushFrame(ambe))
             callDropped++;
     }
+}
+
+void OpMode_YSF::startTx(rtxStatus_t *const status)
+{
+    if (callActive)
+        endCall("transmit");
+    stopRx();
+    if (audioOn) {
+        dmrAudio_stop();
+        audioPath_release(speakerPath);
+        audioOn = false;
+    }
+
+    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    if (!dmrAudio_startTx(micPath, status->dmrMicGain)) {
+        LOG_W("ysf", "PTT: no voice encoder (codec missing or damaged)");
+        if (micPath >= 0)
+            audioPath_release(micPath);
+        micPath = -1;
+        startRx();
+        return;
+    }
+
+    // Own callsign, upper case, padded with spaces
+    bool end = false;
+    for (size_t i = 0; i < CALLSIGN_LENGTH; i++) {
+        char c = end ? '\0' : status->source_address[i];
+        if (c == '\0')
+            end = true;
+        if ((c >= 'a') && (c <= 'z'))
+            c = c - 'a' + 'A';
+        txSrc[i] = ((c > 0x20) && (c < 0x7F)) ? c : ' ';
+    }
+
+    modulator = std::make_unique<Modulator>();
+    modulator->init();
+    radio_disableRtx();
+    radio_enableTx();
+    if (!modulator->start()) {
+        LOG_W("ysf", "PTT: no baseband output path");
+        modulator.reset();
+        radio_disableRtx();
+        dmrAudio_stopTx();
+        if (micPath >= 0)
+            audioPath_release(micPath);
+        micPath = -1;
+        startRx();
+        return;
+    }
+
+    status->opStatus = TX;
+    transmitting = true;
+    txFn = 0;
+    txFrames = 0;
+    txSilence = 0;
+    txStart = getTick();
+    platform_ledOn(RED);
+
+    char src[11];
+    callsignToString(txSrc, src);
+    LOG_I("ysf", "tx start: %s > ALL, DN", src);
+
+    modulator->sendPreamble();
+    sendControlFrame(FI_HEADER);
+}
+
+// Header or terminator: the callsign data channels
+void OpMode_YSF::sendControlFrame(const uint8_t fi)
+{
+    uint8_t csd1[20], csd2[20];
+    memset(csd1, '*', 10);
+    memcpy(&csd1[10], txSrc, 10);
+    memset(csd2, ' ', sizeof(csd2));
+
+    frame_t frame{};
+    encodeSync(frame);
+    encodeFich(makeFich(fi, 0, TX_FRAME_TOTAL, DT_VD_MODE2, 0), frame);
+    encodeCsd(csd1, csd2, frame);
+    modulator->sendFrame(frame);
+}
+
+void OpMode_YSF::sendVoiceFrame()
+{
+    uint8_t dch[10];
+    if (txFn == 0)
+        memset(dch, '*', sizeof(dch));
+    else if (txFn == 1)
+        memcpy(dch, txSrc, sizeof(dch));
+    else
+        memset(dch, ' ', sizeof(dch));
+
+    frame_t frame{};
+    encodeSync(frame);
+    encodeFich(makeFich(FI_COMMUNICATIONS, txFn, TX_FRAME_TOTAL, DT_VD_MODE2,
+                        0),
+               frame);
+    encodeVd2Dch(dch, frame);
+
+    for (size_t n = 0; n < 5; n++) {
+        uint8_t ambe[9];
+        if (!dmrAudio_popTxFrame(ambe)) {
+            memcpy(ambe, ambeSilence, sizeof(ambe));
+            txSilence++;
+        }
+        encodeVd2Voice(ambe, n, frame);
+    }
+
+    modulator->sendFrame(frame);
+    txFn = (txFn + 1) % (TX_FRAME_TOTAL + 1);
+    txFrames++;
+}
+
+void OpMode_YSF::endTx(rtxStatus_t *const status)
+{
+    sendControlFrame(FI_TERMINATOR);
+    modulator->stop(); // returns once the terminator has gone out
+
+    dmrAudio_stopTx();
+    if (micPath >= 0)
+        audioPath_release(micPath);
+    micPath = -1;
+    modulator.reset();
+
+    radio_disableRtx();
+    LOG_I("ysf", "tx end: %lu frames, %lu voice frames sent as silence, %lu ms",
+          (unsigned long)txFrames, (unsigned long)txSilence,
+          (unsigned long)(getTick() - txStart));
+
+    transmitting = false;
+    status->opStatus = RX;
+    platform_ledOff(RED);
+    startRx();
 }

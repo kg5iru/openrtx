@@ -13,6 +13,7 @@
 #include "rtx/OpMode.hpp"
 #include "protocols/YSF/Demodulator.hpp"
 #include "protocols/YSF/FrameDecoder.hpp"
+#include "protocols/YSF/Modulator.hpp"
 
 /**
  * Receive-only Yaesu System Fusion operating mode for the CS7000-M17 Plus.
@@ -46,6 +47,10 @@ private:
     void startCall();
     void pushVoice(const YSF::frame_t &frame, const uint8_t dt);
     void endCall(const char *why);
+    void startTx(rtxStatus_t *const status);
+    void sendVoiceFrame();
+    void sendControlFrame(const uint8_t fi);
+    void endTx(rtxStatus_t *const status);
 
     bool enterRx;
     bool rxOn;
@@ -62,6 +67,17 @@ private:
     std::unique_ptr<int16_t[]> basebandBuf;
     std::unique_ptr<YSF::Demodulator> demod;
     std::unique_ptr<YSF::FrameDecoder> decoder;
+
+    // Transmit
+    bool transmitting;
+    bool pttHeld;       ///< PTT pressed and already acted on
+    pathId micPath;     ///< Microphone path while transmitting
+    uint8_t txFn;       ///< Frame number of the next communications frame
+    uint32_t txFrames;  ///< Communications frames sent
+    uint32_t txSilence; ///< Voice frames sent as silence (none encoded)
+    long long txStart;  ///< getTick() at the start of the transmission
+    uint8_t txSrc[10];  ///< Own callsign, padded with spaces
+    std::unique_ptr<YSF::Modulator> modulator;
 };
 
 #endif /* OPMODE_YSF_CS7000_H */
