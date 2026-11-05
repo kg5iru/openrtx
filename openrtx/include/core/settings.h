@@ -78,6 +78,9 @@ typedef struct
     uint8_t ysf_txDgid;           // YSF DG-ID sent, 0..99
     uint8_t ysf_rxDgid;           // YSF DG-ID received, 0 = all, 1..99
 #endif
+#if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
+    uint8_t ysf_txVw;             // 1 = YSF voice full rate (VW), 0 = DN
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -155,6 +158,9 @@ static const settings_t default_settings =
     "",                           // YSF call to all
     0,                            // YSF DG-ID 0
     0,                            // Receive every YSF DG-ID
+#endif
+#if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
+    0,                            // YSF DN (V/D mode 2)
 #endif
 };
 

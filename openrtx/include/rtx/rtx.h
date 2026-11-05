@@ -83,6 +83,9 @@ typedef struct
     uint8_t  ysfTxDgid;                /**< YSF DG-ID sent, 0..99       */
     uint8_t  ysfRxDgid;                /**< YSF DG-ID received, 0 = all */
 #endif
+#if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
+    bool     ysfTxVw;                  /**< YSF voice full rate (VW)    */
+#endif
 }
 rtxStatus_t;
 

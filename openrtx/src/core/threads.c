@@ -123,6 +123,9 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.ysfTxDgid = settings_ysfDgid(state.settings.ysf_txDgid);
             rtx_cfg.ysfRxDgid = settings_ysfDgid(state.settings.ysf_rxDgid);
             #endif
+            #if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
+            rtx_cfg.ysfTxVw = (state.settings.ysf_txVw == 1);
+            #endif
 
             pthread_mutex_unlock(&rtx_mutex);
 
