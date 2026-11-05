@@ -118,6 +118,7 @@ private:
     void syncedState();
     void lockedState(const int16_t sample);
     void syncUpdateState();
+    void symbolStep();
     void syncFailed();
     void trackTiming(const int16_t value, const int8_t symbol);
     int16_t interpolate() const;
