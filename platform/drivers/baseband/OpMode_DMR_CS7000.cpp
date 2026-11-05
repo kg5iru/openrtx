@@ -181,7 +181,7 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
         LOG_W("dmr", "PTT: no microphone path (%d), sending the test vowel",
               micPath);
 
-    if (!dmrAudio_startTx(micPath)) {
+    if (!dmrAudio_startTx(micPath, status->dmrMicGain)) {
         LOG_W("dmr", "PTT: no voice encoder (codec missing or damaged)");
         if (micPath >= 0)
             audioPath_release(micPath);

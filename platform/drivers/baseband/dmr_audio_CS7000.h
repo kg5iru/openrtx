@@ -47,8 +47,10 @@ unsigned dmrAudio_queued();
  *
  * @param micPath: open microphone path (SOURCE_MIC to SINK_MCU), or -1 for
  * the synthetic test vowel.
+ * @param gainStep: microphone gain, 0..8 for -12 .. +12 dB in 3 dB steps
+ * around CONFIG_MIC_GAIN (4 = 0 dB).
  */
-bool dmrAudio_startTx(const pathId micPath);
+bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep);
 
 /** Stop the transmit encoder. */
 void dmrAudio_stopTx();

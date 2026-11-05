@@ -286,6 +286,10 @@ static void encodeVowel()
  */
 static unsigned txDropped = 0;
 static int16_t txPeak = 0;
+static int32_t txGain = CONFIG_MIC_GAIN; // x CONFIG_MIC_GAIN, 3 dB steps
+
+// CONFIG_MIC_GAIN scaled by -12 .. +12 dB, in 3 dB steps (x 1/16)
+static const uint8_t gainSteps[9] = { 4, 6, 8, 11, 16, 23, 32, 45, 64 };
 
 static void encodeMic()
 {
@@ -330,7 +334,13 @@ static void encodeMic()
                 continue;
 #endif
             sample = dsp_dcBlockFilter(&dcBlock, sample);
-            int32_t v = (int32_t)sample * CONFIG_MIC_GAIN;
+            int32_t v = ((int32_t)sample * txGain) / 16;
+            // Soft limit above 3/4 of full scale, then saturate
+            const int32_t knee = 24576;
+            if (v > knee)
+                v = knee + ((v - knee) / 4);
+            if (v < -knee)
+                v = -knee + ((v + knee) / 4);
             if (v > 32767)
                 v = 32767;
             if (v < -32768)
@@ -373,18 +383,23 @@ static void *encodeThread(void *arg)
         encodeVowel();
     }
 
-    LOG_I("ambe", "encode thread stopped: %u frames, %u dropped, mic peak %d",
-          txFramesEncoded, txDropped, txPeak);
+    LOG_I("ambe",
+          "encode thread stopped: %u frames, %u dropped, mic peak %d, "
+          "gain %ld/16 x %d",
+          txFramesEncoded, txDropped, txPeak, (long)(txGain / CONFIG_MIC_GAIN),
+          CONFIG_MIC_GAIN);
     txRunning = false;
     return NULL;
 }
 
-bool dmrAudio_startTx(const pathId micPath)
+bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep)
 {
     if (txRunning || (dmrAudio_codecStatus() != DMR_CODEC_OK))
         return false;
 
     txMicPath = micPath;
+    txGain = (int32_t)CONFIG_MIC_GAIN
+           * gainSteps[(gainStep < 9) ? gainStep : 4];
 
     txHead = 0;
     txTail = 0;
@@ -492,9 +507,10 @@ void dmrAudio_stop()
 {
 }
 
-bool dmrAudio_startTx(const pathId micPath)
+bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep)
 {
     (void)micPath;
+    (void)gainStep;
     return false;
 }
 
