@@ -179,7 +179,6 @@ static uint32_t slotDisagree = 0;
 enum : uint8_t { SYNC_UNKNOWN = 0, SYNC_BS, SYNC_MS };
 static uint8_t callSync = SYNC_UNKNOWN;
 static uint8_t syncTries = 0; // voice bursts looked at for the sync kind
-static uint8_t syncRaw[2][6]; // windows of the last burst looked at
 
 static inline bool callMuted()
 {
@@ -221,32 +220,49 @@ static void endCall(const char *why)
  * sourced sync) carries no CACH, and the TC bit read from reg 0x52 means
  * nothing (v46 on air: an HT in direct mode was taken as TS1 and muted with
  * TS2 set, and the bit disagreed with itself on a quarter of the bursts).
- * The kind of sync is read from the RX RAM burst windows, where voice frame
- * A has its sync word at the start (v36 dumps: 75 5F D7 DF 75 F7, the BS
- * voice sync, at 0x30 or 0x60).  The first byte of a RAM read is sometimes
- * stale, so bytes 1..5 are compared.
+ * The kind of sync is read from the RX RAM burst windows at 0x30 and 0x60.
+ * Where the sync word sits in a window depends on the call: the BS voice
+ * sync (75 5F D7 DF 75 F7) was at the window start in the v36 dumps through
+ * the hotspot, the MS voice sync (7F 7D 5D D5 7D FD) 3 bytes in with an HT
+ * in direct mode (v47).  So each window is searched for either word, with up
+ * to 3 bit errors.  The first byte of a RAM read is sometimes stale and is
+ * not compared.
  */
+#define SYNC_WINDOW_LEN 16
+
+static uint8_t syncRaw[2][SYNC_WINDOW_LEN]; // windows of the last burst
+
+static unsigned syncErrors(const uint8_t *win, const int offset,
+                           const uint8_t *word)
+{
+    unsigned errors = 0;
+    for (int i = 0; i < 6; i++) {
+        if ((offset + i) == 0)
+            continue;
+        errors += __builtin_popcount(win[offset + i] ^ word[i]);
+    }
+    return errors;
+}
 
 static uint8_t burstSyncKind()
 {
-    static const uint8_t bsVoice[5] = { 0x5F, 0xD7, 0xDF, 0x75, 0xF7 };
-    static const uint8_t msVoice[5] = { 0x7D, 0x5D, 0xD5, 0x7D, 0xFD };
+    static const uint8_t bsVoice[6] = { 0x75, 0x5F, 0xD7, 0xDF, 0x75, 0xF7 };
+    static const uint8_t msVoice[6] = { 0x7F, 0x7D, 0x5D, 0xD5, 0x7D, 0xFD };
     static const uint8_t windows[2] = { 0x30, 0x60 };
 
-    for (int w = 0; w < 2; w++) {
-        C6000.readRxBurst(windows[w], syncRaw[w], 6);
-        bool bs = true, ms = true;
-        for (int i = 0; i < 5; i++) {
-            if (syncRaw[w][1 + i] != bsVoice[i])
-                bs = false;
-            if (syncRaw[w][1 + i] != msVoice[i])
-                ms = false;
-        }
-        if (bs)
-            return SYNC_BS;
-        if (ms)
-            return SYNC_MS;
-    }
+    for (int w = 0; w < 2; w++)
+        C6000.readRxBurst(windows[w], syncRaw[w], SYNC_WINDOW_LEN);
+
+    // MS first: in direct mode the window without the call holds noise, and
+    // could still hold a BS sync from an earlier call through a repeater.
+    for (int w = 0; w < 2; w++)
+        for (int o = 0; o <= (SYNC_WINDOW_LEN - 6); o++)
+            if (syncErrors(syncRaw[w], o, msVoice) <= 3)
+                return SYNC_MS;
+    for (int w = 0; w < 2; w++)
+        for (int o = 0; o <= (SYNC_WINDOW_LEN - 6); o++)
+            if (syncErrors(syncRaw[w], o, bsVoice) <= 3)
+                return SYNC_BS;
     return SYNC_UNKNOWN;
 }
 
@@ -330,8 +346,10 @@ static void pollVoicePort()
             slotMuted = (callSlot != rxTimeslot);
             LOG_W("dmr", "call sync not recognised, taken as TS%u%s", callSlot,
                   slotMuted ? " (muted)" : "");
-            LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x30", syncRaw[0], 6);
-            LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x60", syncRaw[1], 6);
+            LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x30", syncRaw[0],
+                    SYNC_WINDOW_LEN);
+            LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x60", syncRaw[1],
+                    SYNC_WINDOW_LEN);
         } else {
             slotPending = true;
         }
