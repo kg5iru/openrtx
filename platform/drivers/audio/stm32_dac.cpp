@@ -206,8 +206,19 @@ static int stm32dac_start(const uint8_t instance, const void *config,
     if((ctx == NULL) || (ctx->running != 0))
         return -EINVAL;
 
+    /*
+     * Recover a stream left enabled by a previous TX session, else a
+     * stalled stop IRQ wedges the transmitter (dead carrier) until
+     * reboot.  See DmaStream::forceDisable().
+     */
     if(chState[instance].stream.running())
-        return -EBUSY;
+    {
+        channels[instance].tim.stop();
+        chState[instance].stream.forceDisable();
+        if(chState[instance].ctx != NULL)
+            chState[instance].ctx->running = 0;
+        *channels[instance].dacReg = chState[instance].idleLevel;
+    }
 
     __disable_irq();
     ctx->running = 1;

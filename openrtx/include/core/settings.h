@@ -10,26 +10,24 @@
 #include "hwconfig.h"
 #include <stdbool.h>
 
-typedef enum
-{
-    TIMER_OFF =  0,
-    TIMER_5S  =  1,
-    TIMER_10S =  2,
-    TIMER_15S =  3,
-    TIMER_20S =  4,
-    TIMER_25S =  5,
-    TIMER_30S =  6,
-    TIMER_1M  =  7,
-    TIMER_2M  =  8,
-    TIMER_3M  =  9,
-    TIMER_4M  = 10,
-    TIMER_5M  = 11,
+typedef enum {
+    TIMER_OFF = 0,
+    TIMER_5S = 1,
+    TIMER_10S = 2,
+    TIMER_15S = 3,
+    TIMER_20S = 4,
+    TIMER_25S = 5,
+    TIMER_30S = 6,
+    TIMER_1M = 7,
+    TIMER_2M = 8,
+    TIMER_3M = 9,
+    TIMER_4M = 10,
+    TIMER_5M = 11,
     TIMER_15M = 12,
     TIMER_30M = 13,
     TIMER_45M = 14,
-    TIMER_1H  = 15
-}
-display_timer_t;
+    TIMER_1H = 15
+} display_timer_t;
 
 typedef struct
 {
@@ -64,8 +62,36 @@ typedef struct
     uint8_t dmr_aprsPtt;          // 1 = send the position after each TX
     uint8_t dmr_aprsInterval;     // DMR APRS beacon interval index, 0 = off
 #endif
+#ifdef CONFIG_P25
+    // After the DMR fields, so that a record saved by a DMR build keeps them
+    uint8_t p25_preamble;         // P25 TX preamble option, bring-up aid
+    uint8_t p25_tx_level;         // P25 TX BB level
+    uint32_t p25_srcId;           // P25 Source ID (DMR ID)
+    uint32_t p25_dstId;           // P25 Destination ID (DMR ID or TG)
+    uint16_t p25_nac;             // P25 NAC
+    uint8_t p25_rx_invert : 1,    // P25 RX signal invert
+            p25_tx_invert : 1,    // P25 TX signal invert
+            p25_dst_check : 1;    // Check P25 destination ID on RX
+#endif
 }
 __attribute__((packed)) settings_t;
+
+#ifdef CONFIG_P25
+// P25 TX preamble options: field-test/bring-up aid. The Kenwood options
+// are an official fielded configuration (+3,+3,-3,-3, 144 or 255
+// repetitions), TIA is the alternating +-3 preamble, MMDVM the repeated
+// 0x77 octets and the sweep visits all four levels.
+enum p25_preamble_t
+{
+    P25_PREAMBLE_TIA180 = 0,
+    P25_PREAMBLE_MMDVM,
+    P25_PREAMBLE_KENWOOD_SHORT,
+    P25_PREAMBLE_KENWOOD_LONG,
+    P25_PREAMBLE_SWEEP_SHORT,
+    P25_PREAMBLE_SWEEP_LONG,
+    P25_PREAMBLE_NUM
+};
+#endif
 
 
 static const settings_t default_settings =
@@ -104,6 +130,21 @@ static const settings_t default_settings =
     0,                            // DMR APRS off
     0,                            // No DMR APRS after TX
     0,                            // No DMR APRS beacon
+#endif
+#ifdef CONFIG_P25
+    P25_PREAMBLE_KENWOOD_SHORT,   // Default P25 TX preamble: official Kenwood
+                                  // configuration, +3,+3,-3,-3 x 144 (120 ms)
+    166,                          // Default P25 TX BB level: 96 counts/step;
+                                  // on-air calibration of the CS7000P
+                                  // (HR_C6000 LINE_IN, deviation coefficient
+                                  // 0x25) gives 10.8 Hz per step, so 166 =
+                                  // +-1800 Hz outer deviation (TIA-102)
+    0,                            // Empty P25 Source ID
+    0,                            // Empty P25 Destination ID
+    293,                          // Default P25 NAC
+    1,                            // P25 RX invert
+    0,                            // P25 TX invert
+    0,                            // Check P25 destination ID on RX
 #endif
 };
 

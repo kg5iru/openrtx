@@ -16,6 +16,9 @@
 #ifdef CONFIG_YSF_CS7000
 #include "OpMode_YSF_CS7000.hpp"
 #endif
+#ifdef CONFIG_P25
+#include "rtx/OpMode_P25.hpp"
+#endif
 
 static pthread_mutex_t   *cfgMutex;     // Mutex for incoming config messages
 static const rtxStatus_t *newCnf;       // Pointer for incoming config messages
@@ -30,10 +33,13 @@ static OpMode_FM  fmMode;               // FM mode handler
 static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
 #ifdef CONFIG_YSF_CS7000
-static OpMode_YSF ysfMode;              // YSF (RX only) on CS7000-M17 Plus
+static OpMode_YSF ysfMode;              // YSF on CS7000-M17 Plus
 #endif
 #ifdef CONFIG_DMR_CS7000
-static OpMode_DMR dmrMode;              // DMR (RX only) on CS7000-M17 Plus
+static OpMode_DMR dmrMode;              // DMR on CS7000-M17 Plus
+#endif
+#ifdef CONFIG_P25
+static OpMode_P25 p25Mode;              // P25 mode handler
 #endif
 
 
@@ -162,6 +168,9 @@ void rtx_task()
                 #endif
                 #ifdef CONFIG_DMR_CS7000
                 case OPMODE_DMR:  currMode = &dmrMode; break;
+                #endif
+                #ifdef CONFIG_P25
+                case OPMODE_P25:  currMode = &p25Mode; break;
                 #endif
                 default:   currMode = &noMode;
             }

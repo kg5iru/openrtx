@@ -238,13 +238,42 @@ void stm32adc_terminate()
     __DSB();
 }
 
+/**
+ * \internal
+ * Recover a stream left enabled by a previous session.  halt() relies
+ * on a pended DMA IRQ to clear EN; if that IRQ path stalls, the bit
+ * stays set and every restart fails -EBUSY forever (receiver deaf
+ * until reboot).  Force the peripheral down from thread context.
+ */
+static void forceStopAdc(const uint8_t instance)
+{
+    ADC_TypeDef *adc = periph[instance].adc;
+
+#ifdef STM32H743xx
+    adc->CR |= ADC_CR_ADSTP;
+    while((adc->CR & ADC_CR_ADSTP) != 0)
+        ;
+#else
+    adc->CR2 &= ~ADC_CR2_ADON;
+#endif
+
+    periph[instance].tim.stop();
+    periph[instance].stream->forceDisable();
+
+    if(AdcContext[instance] != NULL)
+        AdcContext[instance]->running = 0;
+}
+
 static int stm32adc_start(const uint8_t instance, const void *config, struct streamCtx *ctx)
 {
     if(ctx == NULL)
         return -EINVAL;
 
-    if((ctx->running != 0) || (periph[instance].stream->running()))
+    if(ctx->running != 0)
         return -EBUSY;
+
+    if(periph[instance].stream->running())
+        forceStopAdc(instance);
 
     __disable_irq();
     ctx->running = 1;

@@ -94,6 +94,7 @@ const stringsTable_t spanishStrings =
     .radio             = "Radio",
     .CAN               = "CAN",
     .canRxCheck        = "CAN RX Check",
+    .fmsettings        = "Ajustes de FM",
     .metaText          = "Meta Txt",
 };
 #endif  // SPANISHSTRINGS_H

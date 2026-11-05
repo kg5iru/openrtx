@@ -14,6 +14,7 @@
 #include "interfaces/nvmem.h"
 #include "interfaces/delays.h"
 #include <string.h>
+#include <stdlib.h>
 #include "core/battery.h"
 #include "core/input.h"
 #include "hwconfig.h"
@@ -25,123 +26,103 @@ extern void _ui_drawVFOMiddle();
 extern void _ui_drawMEMMiddle();
 extern void _ui_drawVFOBottom();
 extern void _ui_drawMEMBottom();
-extern void _ui_drawMainVFO(ui_state_t* ui_state);
-extern void _ui_drawMainVFOInput(ui_state_t* ui_state);
-extern void _ui_drawMainMEM(ui_state_t* ui_state);
+extern void _ui_drawMainVFO(ui_state_t *ui_state);
+extern void _ui_drawMainVFOInput(ui_state_t *ui_state);
+extern void _ui_drawMainMEM(ui_state_t *ui_state);
 /* UI menu functions, their implementation is in "ui_menu.c" */
-extern void _ui_drawMenuTop(ui_state_t* ui_state);
+extern void _ui_drawMenuTop(ui_state_t *ui_state);
 #ifdef CONFIG_GPS
 extern void _ui_drawMenuGPS();
-extern void _ui_drawSettingsGPS(ui_state_t* ui_state);
+extern void _ui_drawSettingsGPS(ui_state_t *ui_state);
 #endif
-extern void _ui_drawMenuSettings(ui_state_t* ui_state);
-extern void _ui_drawMenuInfo(ui_state_t* ui_state);
-extern void _ui_drawMenuAbout(ui_state_t* ui_state);
+extern void _ui_drawMenuSettings(ui_state_t *ui_state);
+extern void _ui_drawMenuInfo(ui_state_t *ui_state);
+extern void _ui_drawMenuAbout(ui_state_t *ui_state);
 #ifdef CONFIG_RTC
 extern void _ui_drawSettingsTimeDate();
-extern void _ui_drawSettingsTimeDateSet(ui_state_t* ui_state);
+extern void _ui_drawSettingsTimeDateSet(ui_state_t *ui_state);
 #endif
-extern void _ui_drawSettingsDisplay(ui_state_t* ui_state);
-extern void _ui_drawSettingsM17(ui_state_t* ui_state);
-extern void _ui_drawSettingsModule17(ui_state_t* ui_state);
-extern void _ui_drawSettingsReset2Defaults(ui_state_t* ui_state);
-extern bool _ui_drawMacroMenu(ui_state_t* ui_state);
+extern void _ui_drawSettingsDisplay(ui_state_t *ui_state);
+extern void _ui_drawSettingsM17(ui_state_t *ui_state);
+#ifdef CONFIG_P25
+extern void _ui_drawSettingsP25(ui_state_t *ui_state);
+#endif
+extern void _ui_drawSettingsModule17(ui_state_t *ui_state);
+extern void _ui_drawSettingsReset2Defaults(ui_state_t *ui_state);
+extern bool _ui_drawMacroMenu(ui_state_t *ui_state);
 
-const char *menu_items[] =
-{
-    "Settings",
+const char *menu_items[] = { "Settings",
 #ifdef CONFIG_GPS
-    "GPS",
+                             "GPS",
 #endif
-    "Info",
-    "About",
-    "Shutdown"
-};
+                             "Info", "About", "Shutdown" };
 
-const char *settings_items[] =
-{
-    "Display",
+const char *settings_items[] = { "Display",
 #ifdef CONFIG_RTC
-    "Time & Date",
+                                 "Time & Date",
 #endif
 #ifdef CONFIG_GPS
-    "GPS",
+                                 "GPS",
 #endif
-    "M17",
-    "Module 17",
-    "Default Settings"
-};
+                                 "M17",
+#ifdef CONFIG_P25
+                                 "P25",
+#endif
+                                 "Module 17",   "Default Settings" };
 
-const char *display_items[] =
-{
+const char *display_items[] = {
     "Brightness",
 };
 
-const char *m17_items[] =
-{
-    "Callsign",
-    "Meta Txt",
-    "CAN",
-    "CAN RX Check"
-};
+const char *m17_items[] = { "Callsign", "Meta Txt", "CAN", "CAN RX Check" };
 
-const char *module17_items[] =
-{
-    "Mic Gain",
-    "PTT In",
-    "PTT Out",
-    "TX Phase",
-    "RX Phase",
-    "TX Softpot",
-    "RX Softpot"
-};
-
-#ifdef CONFIG_GPS
-const char *settings_gps_items[] =
-{
-    "GPS Enabled",
-    "GPS Set Time",
-    "UTC Timezone"
-};
+#ifdef CONFIG_P25
+const char *p25_items[] = { "Src Id", "GID", "NAC", "Dst RX Check" };
 #endif
 
-const char *info_items[] =
-{
-    "",
-    "Used heap",
-    "Hw Version",
-    "HMI",
-    "BB Tuning Pot",
+const char *module17_items[] = { "Mic Gain",  "PTT In",   "PTT Out",
+                                 "TX Phase",  "RX Phase", "TX Softpot",
+                                 "RX Softpot" };
+
+#ifdef CONFIG_GPS
+const char *settings_gps_items[] = { "GPS Enabled", "GPS Set Time",
+                                     "UTC Timezone" };
+#endif
+
+const char *info_items[] = {
+    "", "Used heap", "Hw Version", "HMI", "BB Tuning Pot",
 };
 
-const char *authors[] =
-{
-    "Niccolo' IU2KIN",
-    "Silvano IU2KWO",
-    "Federico IU2NUO",
-    "Mathis DB9MAT",
-    "Morgan ON4MOD",
-    "Marco DM4RCO"
-};
+const char *authors[] = { "Niccolo' IU2KIN", "Silvano IU2KWO",
+                          "Federico IU2NUO", "Mathis DB9MAT",
+                          "Morgan ON4MOD",   "Marco DM4RCO" };
 
-static const char symbols_callsign[] = "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/-.";
+static const char symbols_callsign[] =
+    "_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/-.";
+#ifdef CONFIG_P25
+static const char symbols_number[] = "0123456789";
+#endif
 
 // Calculate number of menu entries
-const uint8_t menu_num = sizeof(menu_items)/sizeof(menu_items[0]);
-const uint8_t settings_num = sizeof(settings_items)/sizeof(settings_items[0]);
-const uint8_t display_num = sizeof(display_items)/sizeof(display_items[0]);
+const uint8_t menu_num = sizeof(menu_items) / sizeof(menu_items[0]);
+const uint8_t settings_num = sizeof(settings_items) / sizeof(settings_items[0]);
+const uint8_t display_num = sizeof(display_items) / sizeof(display_items[0]);
 #ifdef CONFIG_GPS
-const uint8_t settings_gps_num = sizeof(settings_gps_items)/sizeof(settings_gps_items[0]);
+const uint8_t settings_gps_num = sizeof(settings_gps_items)
+                               / sizeof(settings_gps_items[0]);
 #endif
-const uint8_t m17_num = sizeof(m17_items)/sizeof(m17_items[0]);
-const uint8_t module17_num = sizeof(module17_items)/sizeof(module17_items[0]);
-const uint8_t info_num = sizeof(info_items)/sizeof(info_items[0]);
-const uint8_t author_num = sizeof(authors)/sizeof(authors[0]);
+const uint8_t m17_num = sizeof(m17_items) / sizeof(m17_items[0]);
+#ifdef CONFIG_P25
+const uint8_t p25_num = sizeof(p25_items) / sizeof(p25_items[0]);
+#endif
+const uint8_t module17_num = sizeof(module17_items) / sizeof(module17_items[0]);
+const uint8_t info_num = sizeof(info_items) / sizeof(info_items[0]);
+const uint8_t author_num = sizeof(authors) / sizeof(authors[0]);
 
-const color_t color_black = {0, 0, 0, 255};
-const color_t color_grey = {60, 60, 60, 255};
-const color_t color_white = {255, 255, 255, 255};
-const color_t yellow_fab413 = {250, 180, 19, 255};
+const color_t color_black = { 0, 0, 0, 255 };
+const color_t color_grey = { 60, 60, 60, 255 };
+const color_t color_white = { 255, 255, 255, 255 };
+const color_t yellow_fab413 = { 250, 180, 19, 255 };
 
 layout_t layout;
 state_t last_state;
@@ -179,7 +160,7 @@ static layout_t _ui_calculateLayout()
     const uint16_t horizontal_pad = 4;
 
     // Top bar font: 6 pt
-    const fontSize_t   top_font = FONT_SIZE_6PT;
+    const fontSize_t top_font = FONT_SIZE_6PT;
     const symbolSize_t top_symbol_size = SYMBOLS_SIZE_6PT;
     // Middle line fonts: 5, 8, 8 pt
     const fontSize_t line1_font = FONT_SIZE_6PT;
@@ -206,58 +187,47 @@ static layout_t _ui_calculateLayout()
     const fontSize_t mode_font_small = FONT_SIZE_6PT;
 
     // Calculate printing positions
-    point_t top_pos    = {horizontal_pad, top_h - status_v_pad - text_v_offset};
-    point_t line1_pos  = {horizontal_pad, top_h + top_pad + line1_h - small_line_v_pad - text_v_offset};
-    point_t line2_pos  = {horizontal_pad, top_h + top_pad + line1_h + line2_h - small_line_v_pad - text_v_offset};
-    point_t line3_pos  = {horizontal_pad, top_h + top_pad + line1_h + line2_h + line3_h - big_line_v_pad - text_v_offset};
-    point_t line4_pos  = {horizontal_pad, top_h + top_pad + line1_h + line2_h + line3_h + line4_h - big_line_v_pad - text_v_offset};
-    point_t line5_pos  = {horizontal_pad, top_h + top_pad + line1_h + line2_h + line3_h + line4_h + line5_h - big_line_v_pad - text_v_offset};
-    point_t bottom_pos = {horizontal_pad, CONFIG_SCREEN_HEIGHT - bottom_pad - status_v_pad - text_v_offset};
+    point_t top_pos = { horizontal_pad, top_h - status_v_pad - text_v_offset };
+    point_t line1_pos = { horizontal_pad, top_h + top_pad + line1_h
+                                              - small_line_v_pad
+                                              - text_v_offset };
+    point_t line2_pos = { horizontal_pad, top_h + top_pad + line1_h + line2_h
+                                              - small_line_v_pad
+                                              - text_v_offset };
+    point_t line3_pos = { horizontal_pad, top_h + top_pad + line1_h + line2_h
+                                              + line3_h - big_line_v_pad
+                                              - text_v_offset };
+    point_t line4_pos = { horizontal_pad,
+                          top_h + top_pad + line1_h + line2_h + line3_h
+                              + line4_h - big_line_v_pad - text_v_offset };
+    point_t line5_pos = { horizontal_pad, top_h + top_pad + line1_h + line2_h
+                                              + line3_h + line4_h + line5_h
+                                              - big_line_v_pad
+                                              - text_v_offset };
+    point_t bottom_pos = { horizontal_pad, CONFIG_SCREEN_HEIGHT - bottom_pad
+                                               - status_v_pad - text_v_offset };
 
-    layout_t new_layout =
-    {
-        hline_h,
-        top_h,
-        line1_h,
-        line2_h,
-        line3_h,
-        line4_h,
-        line5_h,
-        menu_h,
-        bottom_h,
-        bottom_pad,
-        status_v_pad,
-        horizontal_pad,
-        text_v_offset,
-        top_pos,
-        line1_pos,
-        line2_pos,
-        line3_pos,
-        line4_pos,
-        line5_pos,
-        bottom_pos,
-        top_font,
-        top_symbol_size,
-        line1_font,
-        line1_symbol_size,
-        line2_font,
-        line2_symbol_size,
-        line3_font,
-        line3_symbol_size,
-        line4_font,
-        line4_symbol_size,
-        line5_font,
-        line5_symbol_size,
-        bottom_font,
-        input_font,
-        menu_font,
-        message_font,
-        mode_font_big,
-        mode_font_small
-    };
+    layout_t new_layout = { hline_h,       top_h,
+                            line1_h,       line2_h,
+                            line3_h,       line4_h,
+                            line5_h,       menu_h,
+                            bottom_h,      bottom_pad,
+                            status_v_pad,  horizontal_pad,
+                            text_v_offset, top_pos,
+                            line1_pos,     line2_pos,
+                            line3_pos,     line4_pos,
+                            line5_pos,     bottom_pos,
+                            top_font,      top_symbol_size,
+                            line1_font,    line1_symbol_size,
+                            line2_font,    line2_symbol_size,
+                            line3_font,    line3_symbol_size,
+                            line4_font,    line4_symbol_size,
+                            line5_font,    line5_symbol_size,
+                            bottom_font,   input_font,
+                            menu_font,     message_font,
+                            mode_font_big, mode_font_small };
     return new_layout;
 }
-
 
 void ui_init()
 {
@@ -273,15 +243,15 @@ void ui_drawSplashScreen()
 {
     gfx_clearScreen();
 
-    point_t origin = {0, (CONFIG_SCREEN_HEIGHT / 2) - 6};
-    gfx_print(origin, FONT_SIZE_12PT, TEXT_ALIGN_CENTER, yellow_fab413, "O P N\nR T X");
+    point_t origin = { 0, (CONFIG_SCREEN_HEIGHT / 2) - 6 };
+    gfx_print(origin, FONT_SIZE_12PT, TEXT_ALIGN_CENTER, yellow_fab413,
+              "O P N\nR T X");
 }
 
 #ifdef CONFIG_RTC
 void _ui_timedate_add_digit(datetime_t *timedate, uint8_t pos, uint8_t number)
 {
-    switch(pos)
-    {
+    switch (pos) {
         // Set date
         case 1:
             timedate->date += number * 10;
@@ -324,11 +294,11 @@ void _ui_timedate_add_digit(datetime_t *timedate, uint8_t pos, uint8_t number)
 static void _ui_changeBrightness(int variation)
 {
     // Avoid rollover if current value is zero.
-    if((state.settings.brightness == 0) && (variation < 0))
+    if ((state.settings.brightness == 0) && (variation < 0))
         return;
 
     // Cap max brightness to 100
-    if((state.settings.brightness == 100) && (variation > 0))
+    if ((state.settings.brightness == 100) && (variation > 0))
         return;
 
     state.settings.brightness += variation;
@@ -340,10 +310,10 @@ static void _ui_changeCAN(int variation)
     int8_t can = state.settings.m17_can + variation;
 
     // M17 CAN ranges from 0 to 15
-    if(can > 15)
+    if (can > 15)
         can = 0;
 
-    if(can < 0)
+    if (can < 0)
         can = 15;
 
     state.settings.m17_can = can;
@@ -352,13 +322,13 @@ static void _ui_changeCAN(int variation)
 static void _ui_changeWiper(uint16_t *wiper, int variation)
 {
     uint16_t value = *wiper;
-    value         += variation;
+    value += variation;
 
     // Max value for softpot is 0x100, min value is set to 0x001
-    if(value > 0x100)
+    if (value > 0x100)
         value = 0x100;
 
-    if(value < 0x001)
+    if (value < 0x001)
         value = 0x001;
 
     *wiper = value;
@@ -368,10 +338,10 @@ static void _ui_changeMicGain(int variation)
 {
     int8_t gain = mod17CalData.mic_gain + variation;
 
-    if(gain > 2)
+    if (gain > 2)
         gain = 0;
 
-    if(gain < 0)
+    if (gain < 0)
         gain = 2;
 
     mod17CalData.mic_gain = gain;
@@ -380,18 +350,18 @@ static void _ui_changeMicGain(int variation)
 static void _ui_menuUp(uint8_t menu_entries)
 {
     uint8_t maxEntries = menu_entries - 1;
-    const hwInfo_t* hwinfo = platform_getHwInfo();
+    const hwInfo_t *hwinfo = platform_getHwInfo();
 
     // Hide the "shutdown" main menu entry for versions lower than 0.1e
-    if((hwinfo->hw_version < 1) && (state.ui_screen == MENU_TOP))
+    if ((hwinfo->hw_version < 1) && (state.ui_screen == MENU_TOP))
         maxEntries -= 1;
 
     // Hide the softpot menu entries if hardware does not have them
     uint8_t softpot = hwinfo->flags & MOD17_FLAGS_SOFTPOT;
-    if((softpot == 0) && (state.ui_screen == SETTINGS_MODULE17))
+    if ((softpot == 0) && (state.ui_screen == SETTINGS_MODULE17))
         maxEntries -= 2;
 
-    if(ui_state.menu_selected > 0)
+    if (ui_state.menu_selected > 0)
         ui_state.menu_selected -= 1;
     else
         ui_state.menu_selected = maxEntries;
@@ -399,19 +369,19 @@ static void _ui_menuUp(uint8_t menu_entries)
 
 static void _ui_menuDown(uint8_t menu_entries)
 {
-   uint8_t maxEntries = menu_entries - 1;
-   const hwInfo_t* hwinfo = platform_getHwInfo();
+    uint8_t maxEntries = menu_entries - 1;
+    const hwInfo_t *hwinfo = platform_getHwInfo();
 
     // Hide the "shutdown" main menu entry for versions lower than 0.1e
-    if((hwinfo->hw_version < 1) && (state.ui_screen == MENU_TOP))
+    if ((hwinfo->hw_version < 1) && (state.ui_screen == MENU_TOP))
         maxEntries -= 1;
 
     // Hide the softpot menu entries if hardware does not have them
     uint8_t softpot = hwinfo->flags & MOD17_FLAGS_SOFTPOT;
-    if((softpot == 0) && (state.ui_screen == SETTINGS_MODULE17))
+    if ((softpot == 0) && (state.ui_screen == SETTINGS_MODULE17))
         maxEntries -= 2;
 
-    if(ui_state.menu_selected < maxEntries)
+    if (ui_state.menu_selected < maxEntries)
         ui_state.menu_selected += 1;
     else
         ui_state.menu_selected = 0;
@@ -419,12 +389,9 @@ static void _ui_menuDown(uint8_t menu_entries)
 
 static void _ui_menuBack(uint8_t prev_state)
 {
-    if(ui_state.edit_mode)
-    {
+    if (ui_state.edit_mode) {
         ui_state.edit_mode = false;
-    }
-    else
-    {
+    } else {
         // Return to previous menu
         state.ui_screen = prev_state;
         // Reset menu selection
@@ -441,39 +408,40 @@ static void _ui_textInputReset(char *buf, size_t bufSize)
     memset(buf, 0, bufSize);
 }
 
-static void _ui_textInputArrows(char *buf, uint8_t max_len, kbd_msg_t msg)
+static void _ui_textInputArrowsSym(char *buf, uint8_t max_len, kbd_msg_t msg,
+                                   const char *symbols)
 {
-    if(ui_state.input_position >= max_len)
+    if (ui_state.input_position >= max_len)
         return;
 
     uint8_t num_symbols = 0;
-    num_symbols = strlen(symbols_callsign);
+    num_symbols = strlen(symbols);
 
-    if (msg.keys & KEY_RIGHT)
-    {
-        if (ui_state.input_position < (max_len - 1))
-        {
+    if (msg.keys & KEY_RIGHT) {
+        if (ui_state.input_position < (max_len - 1)) {
             ui_state.input_position = ui_state.input_position + 1;
             ui_state.input_set = 0;
         }
-    }
-    else if (msg.keys & KEY_LEFT)
-    {
-        if (ui_state.input_position > 0)
-        {
+    } else if (msg.keys & KEY_LEFT) {
+        if (ui_state.input_position > 0) {
             buf[ui_state.input_position] = '\0';
             ui_state.input_position = ui_state.input_position - 1;
         }
 
         // get index of current selected character in symbol table
-        ui_state.input_set = strcspn(symbols_callsign, &buf[ui_state.input_position]);
-    }
-    else if (msg.keys & KEY_UP)
+        ui_state.input_set = strcspn(symbols, &buf[ui_state.input_position]);
+    } else if (msg.keys & KEY_UP)
         ui_state.input_set = (ui_state.input_set + 1) % num_symbols;
     else if (msg.keys & KEY_DOWN)
-        ui_state.input_set = ui_state.input_set==0 ? num_symbols-1 : ui_state.input_set-1;
+        ui_state.input_set = ui_state.input_set == 0 ? num_symbols - 1 :
+                                                       ui_state.input_set - 1;
 
-    buf[ui_state.input_position] = symbols_callsign[ui_state.input_set];
+    buf[ui_state.input_position] = symbols[ui_state.input_set];
+}
+
+static void _ui_textInputArrows(char *buf, uint8_t max_len, kbd_msg_t msg)
+{
+    _ui_textInputArrowsSym(buf, max_len, msg, symbols_callsign);
 }
 
 static void _ui_textInputConfirm(char *buf)
@@ -489,80 +457,93 @@ void ui_saveState()
 void ui_updateFSM(bool *sync_rtx)
 {
     // Check for events
-    if(evQueue_wrPos == evQueue_rdPos) return;
+    if (evQueue_wrPos == evQueue_rdPos)
+        return;
 
     // Pop an event from the queue
     uint8_t newTail = (evQueue_rdPos + 1) % MAX_NUM_EVENTS;
-    event_t event   = evQueue[evQueue_rdPos];
-    evQueue_rdPos   = newTail;
+    event_t event = evQueue[evQueue_rdPos];
+    evQueue_rdPos = newTail;
 
     // Process pressed keys
-    if(event.type == EVENT_KBD)
-    {
+    if (event.type == EVENT_KBD) {
         kbd_msg_t msg;
         msg.value = event.payload;
 
-        switch(state.ui_screen)
-        {
+        switch (state.ui_screen) {
             // VFO screen
             case MAIN_VFO:
-                if(ui_state.edit_mode)
-                {
-                    if(msg.keys & KEY_ENTER)
-                    {
+                if (ui_state.edit_mode) {
+                    if (msg.keys & KEY_ENTER) {
                         _ui_textInputConfirm(ui_state.new_callsign);
-                        // Save selected callsign and disable input mode
-                        strncpy(state.settings.m17_dest, ui_state.new_callsign, 10);
+                        // Save selected destination and disable input mode
+#ifdef CONFIG_P25
+                        if (state.channel.mode == OPMODE_P25)
+                            state.settings.p25_dstId =
+                                strtoul(ui_state.new_callsign, NULL, 10);
+                        else
+#endif
+                            strncpy(state.settings.m17_dest,
+                                    ui_state.new_callsign, 10);
                         *sync_rtx = true;
                         ui_state.edit_mode = false;
-                    }
-                    else if(msg.keys & KEY_ESC)
+                    } else if (msg.keys & KEY_ESC)
                         ui_state.edit_mode = false;
+#ifdef CONFIG_P25
+                    else if (state.channel.mode == OPMODE_P25)
+                        _ui_textInputArrowsSym(ui_state.new_callsign, 8, msg,
+                                               symbols_number);
+#endif
                     else
                         _ui_textInputArrows(ui_state.new_callsign, 9, msg);
-                }
-                else if(ui_state.edit_meta_text)
-                {
-                    if(msg.keys & KEY_ENTER)
-                    {
+                } else if (ui_state.edit_meta_text) {
+                    if (msg.keys & KEY_ENTER) {
                         _ui_textInputConfirm(ui_state.new_meta_text);
                         // Save selected message and disable input mode
-                        strncpy(state.settings.M17_meta_text, ui_state.new_meta_text, 52);
+                        strncpy(state.settings.M17_meta_text,
+                                ui_state.new_meta_text, 52);
                         ui_state.edit_meta_text = false;
                         *sync_rtx = true;
-                    }
-                    else if(msg.keys & KEY_ESC)
+                    } else if (msg.keys & KEY_ESC)
                         // Discard selected message and disable input mode
                         ui_state.edit_meta_text = false;
                     else
                         _ui_textInputArrows(ui_state.new_meta_text, 52, msg);
-                }
-                else
-                {
-                    if(msg.keys & KEY_ENTER)
-                    {
+                } else {
+                    if (msg.keys & KEY_ENTER) {
                         // Save current main state
                         ui_state.last_main_state = state.ui_screen;
                         // Open Menu
                         state.ui_screen = MENU_TOP;
-                    }
-                    else if (msg.keys & KEY_RIGHT)
-                    {
+                    } else if (msg.keys & KEY_RIGHT) {
                         ui_state.edit_mode = true;
+#ifdef CONFIG_P25
+                        if (state.channel.mode == OPMODE_P25)
+                            _ui_textInputReset(ui_state.new_callsign,
+                                               sizeof(ui_state.new_callsign));
+#endif
                     }
+#ifdef CONFIG_P25
+                    else if (msg.keys & KEY_LEFT) {
+                        // Switch between M17 and P25
+                        if (state.channel.mode == OPMODE_M17)
+                            state.channel.mode = OPMODE_P25;
+                        else
+                            state.channel.mode = OPMODE_M17;
+                        *sync_rtx = true;
+                    }
+#endif
                 }
                 break;
 
             // Top menu screen
             case MENU_TOP:
-                if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
                     _ui_menuUp(menu_num);
-                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(menu_num);
-                else if(msg.keys & KEY_ENTER)
-                {
-                    switch(ui_state.menu_selected)
-                    {
+                else if (msg.keys & KEY_ENTER) {
+                    switch (ui_state.menu_selected) {
                         case M_SETTINGS:
                             state.ui_screen = MENU_SETTINGS;
                             break;
@@ -578,28 +559,29 @@ void ui_updateFSM(bool *sync_rtx)
                     }
                     // Reset menu selection
                     ui_state.menu_selected = 0;
-                }
-                else if(msg.keys & KEY_ESC)
+                } else if (msg.keys & KEY_ESC)
                     _ui_menuBack(ui_state.last_main_state);
                 break;
 
             // Settings menu screen
             case MENU_SETTINGS:
-                if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
                     _ui_menuUp(settings_num);
-                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(settings_num);
-                else if(msg.keys & KEY_ENTER)
-                {
-
-                    switch(ui_state.menu_selected)
-                    {
+                else if (msg.keys & KEY_ENTER) {
+                    switch (ui_state.menu_selected) {
                         case S_DISPLAY:
                             state.ui_screen = SETTINGS_DISPLAY;
                             break;
                         case S_M17:
                             state.ui_screen = SETTINGS_M17;
                             break;
+#ifdef CONFIG_P25
+                        case S_P25:
+                            state.ui_screen = SETTINGS_P25;
+                            break;
+#endif
                         case S_MOD17:
                             state.ui_screen = SETTINGS_MODULE17;
                             break;
@@ -611,195 +593,224 @@ void ui_updateFSM(bool *sync_rtx)
                     }
                     // Reset menu selection
                     ui_state.menu_selected = 0;
-                }
-                else if(msg.keys & KEY_ESC)
+                } else if (msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
             // Info menu screen
             case MENU_INFO:
-                if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
                     _ui_menuUp(info_num);
-                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(info_num);
-                else if(msg.keys & KEY_ESC)
+                else if (msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
             // About screen, scroll without rollover
             case MENU_ABOUT:
-                if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
-                {
-                    if(ui_state.menu_selected > 0)
+                if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT) {
+                    if (ui_state.menu_selected > 0)
                         ui_state.menu_selected -= 1;
-                }
-                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                } else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     ui_state.menu_selected += 1;
-                else if(msg.keys & KEY_ESC)
+                else if (msg.keys & KEY_ESC)
                     _ui_menuBack(MENU_TOP);
                 break;
 
             case SETTINGS_DISPLAY:
-                if(msg.keys & KEY_LEFT)
-                {
-                    switch(ui_state.menu_selected)
-                    {
+                if (msg.keys & KEY_LEFT) {
+                    switch (ui_state.menu_selected) {
                         case D_BRIGHTNESS:
                             _ui_changeBrightness(-5);
                             break;
                         default:
                             state.ui_screen = SETTINGS_DISPLAY;
                     }
-                }
-                else if(msg.keys & KEY_RIGHT)
-                {
-                    switch(ui_state.menu_selected)
-                    {
+                } else if (msg.keys & KEY_RIGHT) {
+                    switch (ui_state.menu_selected) {
                         case D_BRIGHTNESS:
                             _ui_changeBrightness(+5);
                             break;
                         default:
                             state.ui_screen = SETTINGS_DISPLAY;
                     }
-                }
-                else if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                } else if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
                     _ui_menuUp(display_num);
-                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(display_num);
-                else if(msg.keys & KEY_ESC)
-                    {
-                        nvm_writeSettings(&state.settings);
-                        _ui_menuBack(MENU_SETTINGS);
-                    }
+                else if (msg.keys & KEY_ESC) {
+                    nvm_writeSettings(&state.settings);
+                    _ui_menuBack(MENU_SETTINGS);
+                }
                 break;
 
             // M17 Settings
             case SETTINGS_M17:
 
-                if(ui_state.edit_mode)
-                {
-                    if(msg.keys & KEY_ENTER)
-                    {
+                if (ui_state.edit_mode) {
+                    if (msg.keys & KEY_ENTER) {
                         _ui_textInputConfirm(ui_state.new_callsign);
                         // Save selected callsign and disable input mode
-                        strncpy(state.settings.callsign, ui_state.new_callsign, 10);
+                        strncpy(state.settings.callsign, ui_state.new_callsign,
+                                10);
                         ui_state.edit_mode = false;
-                    }
-                    else if(msg.keys & KEY_ESC)
+                    } else if (msg.keys & KEY_ESC)
                         ui_state.edit_mode = false;
                     else
                         _ui_textInputArrows(ui_state.new_callsign, 9, msg);
-                }
-                else if(ui_state.edit_meta_text)
-                {
-                    if(msg.keys & KEY_ENTER)
-                    {
+                } else if (ui_state.edit_meta_text) {
+                    if (msg.keys & KEY_ENTER) {
                         _ui_textInputConfirm(ui_state.new_meta_text);
                         // Save selected message and disable input mode
-                        strncpy(state.settings.M17_meta_text, ui_state.new_meta_text, 52);
+                        strncpy(state.settings.M17_meta_text,
+                                ui_state.new_meta_text, 52);
                         ui_state.edit_meta_text = false;
                         ui_state.edit_mode = false;
-                    }
-                    else if(msg.keys & KEY_ESC)
+                    } else if (msg.keys & KEY_ESC)
                         // Discard selected message and disable input mode
                         ui_state.edit_meta_text = false;
                     else
                         _ui_textInputArrows(ui_state.new_meta_text, 52, msg);
-                }
-                else
-                {
+                } else {
                     // Not in edit mode: handle CAN setting
-                    if(msg.keys & KEY_LEFT)
-                    {
-                        switch(ui_state.menu_selected)
-                        {
+                    if (msg.keys & KEY_LEFT) {
+                        switch (ui_state.menu_selected) {
                             case M_CAN:
                                 _ui_changeCAN(-1);
                                 break;
                             case M_CAN_RX:
-                                state.settings.m17_can_rx = !state.settings.m17_can_rx;
+                                state.settings.m17_can_rx =
+                                    !state.settings.m17_can_rx;
                                 break;
                             default:
                                 state.ui_screen = SETTINGS_M17;
                         }
-                    }
-                    else if(msg.keys & KEY_RIGHT)
-                    {
-                        switch(ui_state.menu_selected)
-                        {
+                    } else if (msg.keys & KEY_RIGHT) {
+                        switch (ui_state.menu_selected) {
                             case M_CAN:
                                 _ui_changeCAN(+1);
                                 break;
                             case M_CAN_RX:
-                                state.settings.m17_can_rx = !state.settings.m17_can_rx;
+                                state.settings.m17_can_rx =
+                                    !state.settings.m17_can_rx;
                                 break;
                             default:
                                 state.ui_screen = SETTINGS_M17;
                         }
-                    }
-                    else if(msg.keys & KEY_ENTER)
-                    {
-                        switch(ui_state.menu_selected)
-                        {
+                    } else if (msg.keys & KEY_ENTER) {
+                        switch (ui_state.menu_selected) {
                             // Enable callsign input
                             case M_CALLSIGN:
                                 ui_state.edit_mode = true;
-                                _ui_textInputReset(ui_state.new_callsign,
-                                        sizeof(ui_state.new_callsign));
+                                _ui_textInputReset(
+                                    ui_state.new_callsign,
+                                    sizeof(ui_state.new_callsign));
                                 break;
                             // Enable meta text input
                             case M_METATEXT:
                                 ui_state.edit_meta_text = true;
-                                _ui_textInputReset(ui_state.new_meta_text,
-                                        sizeof(ui_state.new_meta_text));
+                                _ui_textInputReset(
+                                    ui_state.new_meta_text,
+                                    sizeof(ui_state.new_meta_text));
                                 break;
                             default:
                                 state.ui_screen = SETTINGS_M17;
                         }
-                    }
-                    else if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                    } else if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
                         _ui_menuUp(m17_num);
-                    else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                    else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                         _ui_menuDown(m17_num);
-                    else if(msg.keys & KEY_ESC)
-                    {
+                    else if (msg.keys & KEY_ESC) {
                         *sync_rtx = true;
                         nvm_writeSettings(&state.settings);
                         _ui_menuBack(MENU_SETTINGS);
                     }
                 }
                 break;
-            case SETTINGS_RESET2DEFAULTS:
-                if(! ui_state.edit_mode)
-                {
-                    //require a confirmation ENTER, then another
-                    //edit_mode is slightly misused to allow for this
-                    if(msg.keys & KEY_ENTER)
-                    {
-                        ui_state.edit_mode = true;
-                    }
-                    else if(msg.keys & KEY_ESC)
-                    {
+#ifdef CONFIG_P25
+            case SETTINGS_P25:
+                if (ui_state.edit_mode) {
+                    bool valid = true;
+                    if (msg.keys & KEY_ENTER) {
+                        _ui_textInputConfirm(ui_state.new_callsign);
+                        uint32_t value = strtoul(ui_state.new_callsign, NULL,
+                                                 10);
+                        switch (ui_state.menu_selected) {
+                            case P_SRCID:
+                                state.settings.p25_srcId = value;
+                                break;
+                            case P_DSTID:
+                                state.settings.p25_dstId = value;
+                                break;
+                            case P_NAC:
+                                // Accept only values that fit the twelve NAC
+                                // bits, the screen shows what is wrong.
+                                if (value <= 0xFFF)
+                                    state.settings.p25_nac = value;
+                                else
+                                    valid = false;
+                                break;
+                        }
+                        if (valid)
+                            ui_state.edit_mode = false;
+                    } else if (msg.keys & KEY_ESC)
+                        ui_state.edit_mode = false;
+                    else
+                        _ui_textInputArrowsSym(ui_state.new_callsign, 8, msg,
+                                               symbols_number);
+                } else {
+                    if (msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT) {
+                        if (ui_state.menu_selected == P_DSTCHECK)
+                            state.settings.p25_dst_check =
+                                !state.settings.p25_dst_check;
+                    } else if (msg.keys & KEY_ENTER) {
+                        switch (ui_state.menu_selected) {
+                            case P_SRCID:
+                            case P_DSTID:
+                            case P_NAC:
+                                ui_state.edit_mode = true;
+                                _ui_textInputReset(
+                                    ui_state.new_callsign,
+                                    sizeof(ui_state.new_callsign));
+                                break;
+                            default:
+                                break;
+                        }
+                    } else if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                        _ui_menuUp(p25_num);
+                    else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                        _ui_menuDown(p25_num);
+                    else if (msg.keys & KEY_ESC) {
+                        *sync_rtx = true;
+                        nvm_writeSettings(&state.settings);
                         _ui_menuBack(MENU_SETTINGS);
                     }
                 }
-                else
-                {
-                    if(msg.keys & KEY_ENTER)
-                    {
+                break;
+#endif
+            case SETTINGS_RESET2DEFAULTS:
+                if (!ui_state.edit_mode) {
+                    //require a confirmation ENTER, then another
+                    //edit_mode is slightly misused to allow for this
+                    if (msg.keys & KEY_ENTER) {
+                        ui_state.edit_mode = true;
+                    } else if (msg.keys & KEY_ESC) {
+                        _ui_menuBack(MENU_SETTINGS);
+                    }
+                } else {
+                    if (msg.keys & KEY_ENTER) {
                         ui_state.edit_mode = false;
 
                         // Reset calibration values
-                        mod17CalData.tx_wiper     = 0x080;
-                        mod17CalData.rx_wiper     = 0x080;
+                        mod17CalData.tx_wiper = 0x080;
+                        mod17CalData.rx_wiper = 0x080;
                         mod17CalData.bb_tx_invert = 0;
                         mod17CalData.bb_rx_invert = 0;
-                        mod17CalData.mic_gain     = 0;
+                        mod17CalData.mic_gain = 0;
 
                         state_resetSettingsAndVfo();
                         nvm_writeSettings(&state.settings);
                         _ui_menuBack(MENU_SETTINGS);
-                    }
-                    else if(msg.keys & KEY_ESC)
-                    {
+                    } else if (msg.keys & KEY_ESC) {
                         ui_state.edit_mode = false;
                         _ui_menuBack(MENU_SETTINGS);
                     }
@@ -807,10 +818,8 @@ void ui_updateFSM(bool *sync_rtx)
                 break;
             // Module17 Settings
             case SETTINGS_MODULE17:
-                if(msg.keys & KEY_LEFT)
-                {
-                    switch(ui_state.menu_selected)
-                    {
+                if (msg.keys & KEY_LEFT) {
+                    switch (ui_state.menu_selected) {
                         case D_TXWIPER:
                             _ui_changeWiper(&mod17CalData.tx_wiper, -1);
                             break;
@@ -835,11 +844,8 @@ void ui_updateFSM(bool *sync_rtx)
                         default:
                             state.ui_screen = SETTINGS_MODULE17;
                     }
-                }
-                else if(msg.keys & KEY_RIGHT)
-                {
-                    switch(ui_state.menu_selected)
-                    {
+                } else if (msg.keys & KEY_RIGHT) {
+                    switch (ui_state.menu_selected) {
                         case D_TXWIPER:
                             _ui_changeWiper(&mod17CalData.tx_wiper, +1);
                             break;
@@ -864,13 +870,11 @@ void ui_updateFSM(bool *sync_rtx)
                         default:
                             state.ui_screen = SETTINGS_MODULE17;
                     }
-                }
-                else if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                } else if (msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
                     _ui_menuUp(module17_num);
-                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                else if (msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(module17_num);
-                else if(msg.keys & KEY_ESC)
-                {
+                else if (msg.keys & KEY_ESC) {
                     nvm_writeSettings(&state.settings);
                     _ui_menuBack(MENU_SETTINGS);
                 }
@@ -881,14 +885,12 @@ void ui_updateFSM(bool *sync_rtx)
 
 bool ui_updateGUI()
 {
-    if(!layout_ready)
-    {
+    if (!layout_ready) {
         layout = _ui_calculateLayout();
         layout_ready = true;
     }
     // Draw current GUI page
-    switch(last_state.ui_screen)
-    {
+    switch (last_state.ui_screen) {
         // VFO main screen
         case MAIN_VFO:
             _ui_drawMainVFO(&ui_state);
@@ -917,6 +919,12 @@ bool ui_updateGUI()
         case SETTINGS_M17:
             _ui_drawSettingsM17(&ui_state);
             break;
+#ifdef CONFIG_P25
+        // P25 settings screen
+        case SETTINGS_P25:
+            _ui_drawSettingsP25(&ui_state);
+            break;
+#endif
         // Module 17 settings screen
         case SETTINGS_MODULE17:
             _ui_drawSettingsModule17(&ui_state);
@@ -935,11 +943,12 @@ bool ui_pushEvent(const uint8_t type, const uint32_t data)
     uint8_t newHead = (evQueue_wrPos + 1) % MAX_NUM_EVENTS;
 
     // Queue is full
-    if(newHead == evQueue_rdPos) return false;
+    if (newHead == evQueue_rdPos)
+        return false;
 
     // Preserve atomicity when writing the new element into the queue.
     event_t event;
-    event.type    = type;
+    event.type = type;
     event.payload = data;
 
     evQueue[evQueue_wrPos] = event;

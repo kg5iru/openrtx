@@ -78,8 +78,16 @@ static int stm32pwm_start(const uint8_t instance, const void *cfg,
     if(ctx == NULL)
         return -EINVAL;
 
-    if((ctx->running != 0) || stream.running())
+    if(ctx->running != 0)
         return -EBUSY;
+
+    /*
+     * Recover a stream left enabled by a previous TX session, the same
+     * way the ADC/DAC drivers do: a stalled stop IRQ would otherwise
+     * fail every restart with -EBUSY until reboot.
+     */
+    if(stream.running())
+        stream.forceDisable();
 
     __disable_irq();
     ctx->running = 1;

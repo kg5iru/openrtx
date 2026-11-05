@@ -254,6 +254,14 @@ void radio_setOpmode(const enum opmode mode)
 #endif
             break;
 
+#ifdef CONFIG_P25
+        case OPMODE_P25:
+            C6000.fmMode();         // HR_C5000 in FM mode
+            C6000.setInputGain(+9); // Input gain in dB, as for M17
+            C6000.setModFactor(0x25);    // Same deviation coefficient as M17
+            break;
+#endif
+
         default:
             break;
     }
@@ -407,12 +415,22 @@ void radio_enableTx()
             // it once the RF chain is keyed.
             break;
 
+#ifdef CONFIG_P25
+        case OPMODE_P25:
+            C6000.disableTones();
+            C6000.startAnalogTx(TxAudioSource::LINE_IN, FmConfig::BW_25kHz);
+            break;
+#endif
+
         default:
             break;
     }
 
     analogTx = (config->opMode == OPMODE_FM) || (config->opMode == OPMODE_M17)
             || (config->opMode == OPMODE_YSF);
+#ifdef CONFIG_P25
+    analogTx = analogTx || (config->opMode == OPMODE_P25);
+#endif
     gpioDev_set(TX_PWR_EN);     // Enable TX PA
 
     radioStatus = TX;

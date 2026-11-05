@@ -49,6 +49,9 @@ enum uiScreen
     SETTINGS_DISPLAY,
     SETTINGS_GPS,
     SETTINGS_M17,
+#ifdef CONFIG_P25
+    SETTINGS_P25,
+#endif
     SETTINGS_MODULE17,
     SETTINGS_RESET2DEFAULTS,
     LOW_BAT
@@ -83,6 +86,9 @@ enum settingsItems
     ,S_GPS
 #endif
     ,S_M17
+#ifdef CONFIG_P25
+    ,S_P25
+#endif
     ,S_MOD17
     ,S_RESET2DEFAULTS
 };
@@ -114,6 +120,16 @@ enum m17Items
     M_CAN,
     M_CAN_RX
 };
+
+#ifdef CONFIG_P25
+enum p25Items
+{
+    P_SRCID = 0,
+    P_DSTID,
+    P_NAC,
+    P_DSTCHECK
+};
+#endif
 
 enum module17Items
 {
@@ -218,6 +234,9 @@ extern const char *settings_items[];
 extern const char *display_items[];
 extern const char *settings_gps_items[];
 extern const char *m17_items[];
+#ifdef CONFIG_P25
+extern const char *p25_items[];
+#endif
 extern const char *module17_items[];
 extern const char *backup_restore_items[];
 extern const char *info_items[];
@@ -228,6 +247,9 @@ extern const uint8_t display_num;
 extern const uint8_t settings_gps_num;
 extern const uint8_t backup_restore_num;
 extern const uint8_t m17_num;
+#ifdef CONFIG_P25
+extern const uint8_t p25_num;
+#endif
 extern const uint8_t module17_num;
 extern const uint8_t info_num;
 extern const uint8_t author_num;

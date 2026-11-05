@@ -138,6 +138,10 @@ static void _ui_drawModeInfo(ui_state_t* ui_state)
                 }
                 else
                 {
+#ifdef CONFIG_P25
+                    gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_LEFT,
+                              color_white, "P25");
+#endif
                     // Menu
                     gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
                               color_white, "Menu");
@@ -145,6 +149,67 @@ static void _ui_drawModeInfo(ui_state_t* ui_state)
                 break;
             }
         }
+
+#ifdef CONFIG_P25
+        case OPMODE_P25:
+        {
+            rtxStatus_t rtxStatus = rtx_getCurrentStatus();
+
+            // Print NAC on the top bar
+            gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_RIGHT,
+                      color_white, "NAC %u", state.settings.p25_nac);
+
+            if(rtxStatus.lsfOk)
+            {
+                // Call in progress: source and destination IDs
+                gfx_drawSymbol(layout.line1_pos, layout.line1_symbol_font, TEXT_ALIGN_LEFT,
+                               color_white, SYMBOL_CALL_MADE);
+                gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "%lu", (unsigned long) rtxStatus.P25_SrcId);
+                gfx_drawSymbol(layout.line2_pos, layout.line2_symbol_font, TEXT_ALIGN_LEFT,
+                               color_white, SYMBOL_CALL_RECEIVED);
+                gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                          color_white, "%lu", (unsigned long) rtxStatus.P25_DstId);
+            }
+            else
+            {
+                char dst[12];
+
+                if(ui_state->edit_mode)
+                    snprintf(dst, sizeof(dst), "%s", ui_state->new_callsign);
+                else if(state.settings.p25_dstId == 0)
+                    snprintf(dst, sizeof(dst), "--");
+                else
+                    snprintf(dst, sizeof(dst), "%lu", (unsigned long) state.settings.p25_dstId);
+
+                // Last heard source, then our destination talkgroup
+                if(rtxStatus.P25_SrcId == 0)
+                    gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                              color_white, "LAST");
+                else
+                    gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
+                              color_white, "%lu", (unsigned long) rtxStatus.P25_SrcId);
+                gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                          color_white, "%s", dst);
+            }
+
+            if (ui_state->edit_mode)
+            {
+                gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_LEFT,
+                          color_white, "Cancel");
+                gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
+                          color_white, "Accept");
+            }
+            else
+            {
+                gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_LEFT,
+                          color_white, "M17");
+                gfx_print(layout.line5_pos, layout.line5_font, TEXT_ALIGN_RIGHT,
+                          color_white, "Menu");
+            }
+            break;
+        }
+#endif
     }
 }
 

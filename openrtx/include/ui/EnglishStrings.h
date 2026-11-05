@@ -94,6 +94,7 @@ const stringsTable_t englishStrings =
     .radio             = "Radio",
     .CAN               = "CAN",
     .canRxCheck        = "CAN RX Check",
+    .fmsettings        = "FM Settings",
     .metaText          = "Meta Txt",
 };
 #endif  // ENGLISHSTRINGS_H

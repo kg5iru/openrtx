@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/imostlylurk/imbe_embedded.git
+revision = b49c753b9d6a8b1221138fc29ac3e10fd49f7e8a
+patch_directory = imbe_vocoder
+
+[provide]
+dependency_names = imbe_vocoder

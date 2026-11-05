@@ -78,6 +78,31 @@ ysf_src = ['openrtx/src/protocols/YSF/Coding.cpp',
            'openrtx/src/protocols/YSF/Demodulator.cpp']
 
 ##
+## P25 (TIA-102 Phase 1) sources
+##
+
+# Link control, low speed data and FEC (Golay, Hamming, Reed-Solomon)
+p25_src_com = ['openrtx/src/protocols/P25/AMBEFEC.cpp',
+               'openrtx/src/protocols/P25/RS241213.cpp',
+               'openrtx/src/protocols/P25/P25Utils.cpp',
+               'openrtx/src/protocols/P25/P25LowSpeedData.cpp',
+               'openrtx/src/protocols/P25/P25Data.cpp',
+               'openrtx/src/protocols/P25/P25_Audio.cpp',
+               'openrtx/src/protocols/P25/Hamming.cpp',
+               'openrtx/src/protocols/P25/Golay24128.cpp']
+
+# Operating mode
+p25_src = ['openrtx/src/rtx/OpMode_P25.cpp']
+
+# C4FM modem, IMBE codec glue
+p25_modem_src = ['openrtx/src/protocols/P25/modem/DSP.cpp',
+                 'openrtx/src/protocols/P25/modem/Modulator.cpp',
+                 'openrtx/src/protocols/P25/modem/Demodulator.cpp',
+                 'openrtx/src/protocols/P25/modem/Vocoder.cpp',
+                 'openrtx/src/protocols/P25/modem/Nid.cpp',
+                 'openrtx/src/protocols/P25/modem/AudioCodec.cpp']
+
+##
 ## OpenRTX UI sources
 ##
 
@@ -136,6 +161,10 @@ if not meson.is_cross_build()
 else
   codec2_dep = codec2_proj.get_variable('codec2_dep')
 endif
+
+# IMBE vocoder for P25, fetched and built as a subproject like codec2
+imbe_vocoder_proj = subproject('imbe_vocoder')
+imbe_vocoder_dep  = imbe_vocoder_proj.get_variable('imbe_vocoder_dep')
 
 # Catch2, C++ testing framework (only for native/linux builds)
 if not meson.is_cross_build()
@@ -381,9 +410,9 @@ linux_def = {'PLATFORM_LINUX': '', 'VP_USE_FILESYSTEM':''}
 
 sdl_dep     = dependency('SDL2',     required: false)
 threads_dep = dependency('threads',  required: false)
-linux_src  += openrtx_src
+linux_src  += openrtx_src + p25_src + p25_src_com + p25_modem_src
 linux_inc  += openrtx_inc
-linux_def  += openrtx_def
+linux_def  += openrtx_def + {'CONFIG_P25': ''}
 linux_def  += {'sniprintf':'snprintf', 'vsniprintf':'vsnprintf'}
 
 #
@@ -469,9 +498,9 @@ mduv3x0_src = ['platform/drivers/CPS/cps_io_native_MDUV3x0.c',
 mduv3x0_inc = ['platform/targets/MD-UV3x0']
 mduv3x0_def =  {'PLATFORM_MDUV3x0': '', 'timegm': 'mktime'}
 
-mduv3x0_src += openrtx_src + stm32f405_src + ui_src_default + mdx_src
+mduv3x0_src += openrtx_src + p25_src + p25_src_com + p25_modem_src + stm32f405_src + ui_src_default + mdx_src
 mduv3x0_inc += openrtx_inc + stm32f405_inc
-mduv3x0_def += openrtx_def + stm32f405_def
+mduv3x0_def += openrtx_def + {'CONFIG_P25': ''} + stm32f405_def
 
 ##
 ## TYT MD-9600
@@ -534,9 +563,9 @@ mod17_src = ['platform/targets/Module17/platform.c',
 mod17_inc = ['platform/targets/Module17']
 mod17_def = {'PLATFORM_MOD17': ''}
 
-mod17_src += openrtx_src + stm32f405_src + ui_src_module17
+mod17_src += openrtx_src + p25_src + p25_src_com + p25_modem_src + stm32f405_src + ui_src_module17
 mod17_inc += openrtx_inc + stm32f405_inc
-mod17_def += openrtx_def + stm32f405_def
+mod17_def += openrtx_def + {'CONFIG_P25': ''} + stm32f405_def
 
 ##
 ## Connect Systems CS70000
@@ -565,9 +594,9 @@ cs7000_src = ['platform/drivers/NVM/nvmem_CS7000.c',
              'platform/targets/CS7000/platform.c']
 
 cs7000_inc = ['platform/targets/CS7000']
-cs7000_def = {'PLATFORM_CS7000': '', 'timegm': 'mktime'}
+cs7000_def = {'PLATFORM_CS7000': '', 'timegm': 'mktime', 'CONFIG_P25': ''}
 
-cs7000_src += openrtx_src + stm32f405_src + ui_src_default
+cs7000_src += openrtx_src + stm32f405_src + ui_src_default + p25_src + p25_src_com + p25_modem_src
 cs7000_inc += openrtx_inc + stm32f405_inc
 cs7000_def += openrtx_def + stm32f405_def
 
@@ -598,7 +627,7 @@ cs7000p_src = ['platform/drivers/NVM/nvmem_CS7000.c',
                'platform/targets/CS7000-PLUS/platform.c']
 
 cs7000p_inc = ['platform/targets/CS7000-PLUS']
-cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime'}
+cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime', 'CONFIG_P25': ''}
 
 # Optional AMBE+2 vocoder glue.  The codec itself is not part of OpenRTX: it is
 # extracted from the user's own Connect Systems firmware, see
@@ -628,6 +657,7 @@ if get_option('rtxlink_log')
 endif
 
 cs7000p_src += openrtx_src + stm32h743_src + miosix_cm7_src + ui_src_default
+cs7000p_src += p25_src + p25_src_com + p25_modem_src
 cs7000p_inc += openrtx_inc + stm32h743_inc + miosix_cm7_inc
 cs7000p_def += openrtx_def + stm32h743_def + miosix_cm7_def
 
@@ -810,7 +840,7 @@ endforeach
 linux_opts = {
   'sources'            : linux_default_src,
   'include_directories': linux_inc,
-  'dependencies'       : [sdl_dep, threads_dep, codec2_dep],
+  'dependencies'       : [sdl_dep, threads_dep, codec2_dep, imbe_vocoder_dep],
   'c_args'             : linux_c_args,
   'cpp_args'           : linux_cpp_args,
   'link_args'          : linux_l_args
@@ -819,7 +849,7 @@ linux_opts = {
 linux_small_opts = {
     'sources'            : linux_default_src,
     'include_directories': linux_inc,
-    'dependencies'       : [sdl_dep, threads_dep, codec2_dep],
+    'dependencies'       : [sdl_dep, threads_dep, codec2_dep, imbe_vocoder_dep],
     'c_args'             : linux_small_c_args,
     'cpp_args'           : linux_small_cpp_args,
     'link_args'          : linux_l_args
@@ -828,7 +858,7 @@ linux_small_opts = {
 linux_mod17_opts = {
     'sources'            : linux_mod17_src,
     'include_directories': linux_inc,
-    'dependencies'       : [sdl_dep, threads_dep, codec2_dep],
+    'dependencies'       : [sdl_dep, threads_dep, codec2_dep, imbe_vocoder_dep],
     'c_args'             : linux_mod17_c_args,
     'cpp_args'           : linux_mod17_cpp_args,
     'link_args'          : linux_l_args
@@ -846,7 +876,7 @@ md3x0_opts = {
 mduv3x0_opts = {
   'sources'            : mduv3x0_src,
   'include_directories': mduv3x0_inc,
-  'dependencies'       : [codec2_dep],
+  'dependencies'       : [codec2_dep, imbe_vocoder_dep],
   'c_args'             : mduv3x0_args,
   'cpp_args'           : mduv3x0_args,
   'link_args'          : ['-Wl,-T../platform/mcu/STM32F4xx/linker_script_MDx.ld']
@@ -882,7 +912,7 @@ md9600_opts = {
 mod17_opts = {
   'sources'            : mod17_src,
   'include_directories': mod17_inc,
-  'dependencies'       : [codec2_dep],
+  'dependencies'       : [codec2_dep, imbe_vocoder_dep],
   'c_args'             : mod17_args,
   'cpp_args'           : mod17_args,
   'link_args'          : ['-Wl,-T../platform/mcu/STM32F4xx/stm32_1m+192k_rom.ld']
@@ -910,7 +940,7 @@ ttwrplus_opts = {
 cs7000_opts = {
   'sources'            : cs7000_src,
   'include_directories': cs7000_inc,
-  'dependencies'       : [codec2_dep],
+  'dependencies'       : [codec2_dep, imbe_vocoder_dep],
   'c_args'             : cs7000_args,
   'cpp_args'           : cs7000_args,
   'link_args'          : ['-Wl,-T../platform/mcu/STM32F4xx/stm32_1m+192k_rom.ld']
@@ -919,7 +949,7 @@ cs7000_opts = {
 cs7000p_opts = {
   'sources'            : cs7000p_src,
   'include_directories': cs7000p_inc,
-  'dependencies'       : [codec2_dep],
+  'dependencies'       : [codec2_dep, imbe_vocoder_dep],
   'c_args'             : cs7000p_args,
   'cpp_args'           : cs7000p_args,
   'link_args'          : ['-Wl,-T../platform/mcu/STM32H7xx/linker_script_cs7000p.ld',
@@ -1218,7 +1248,7 @@ linux = alias_target('linux', linux_targets)
 unit_test_opts = {'c_args'             : linux_c_args,
                   'cpp_args'           : linux_cpp_args,
                   'include_directories': linux_inc,
-                  'dependencies'       : [sdl_dep, threads_dep, codec2_dep, catch2_dep],
+                  'dependencies'       : [sdl_dep, threads_dep, codec2_dep, catch2_dep, imbe_vocoder_dep],
                   'link_args'          : linux_l_args}
 
 unit_test_src = linux_src + ui_src_default
@@ -1258,6 +1288,26 @@ cps_test = executable('cps_test',
 linux_inputStream_test = executable('linux_inputStream_test',
                                     sources : unit_test_src + ['tests/unit/linux_inputStream_test.cpp'],
                                     kwargs  : unit_test_opts)
+
+p25_o25_loopback_test = executable('p25_o25_loopback_test',
+                                   sources : unit_test_src + ['tests/unit/P25_o25_loopback.cpp'],
+                                   kwargs  : unit_test_opts)
+
+p25_o25_sweep = executable('p25_o25_sweep',
+                           sources : unit_test_src + ['tests/unit/P25_o25_sweep.cpp'],
+                           kwargs  : unit_test_opts)
+
+p25_o25_nid_test = executable('p25_o25_nid_test',
+                              sources : unit_test_src + ['tests/unit/P25_o25_nid.cpp'],
+                              kwargs  : unit_test_opts)
+
+p25_o25_framing_test = executable('p25_o25_framing_test',
+                                  sources : unit_test_src + ['tests/unit/P25_o25_framing.cpp'],
+                                  kwargs  : unit_test_opts)
+
+p25_o25_replay = executable('p25_o25_replay',
+                            sources : unit_test_src + ['tests/unit/P25_o25_replay.cpp'],
+                            kwargs  : unit_test_opts)
 
 minmea_conversion_test = executable('minmea_conversion_test',
                                      sources : unit_test_src + ['tests/unit/convert_minmea_coord.cpp'],
@@ -1316,6 +1366,9 @@ test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)
 test('M17 Callsign Unit Test',          m17_callsign_test)
 test('M17 Meta Text Unit Test',         m17_metatext_test)
+test('P25 o25 Modem Loopback Unit Test', p25_o25_loopback_test)
+test('P25 o25 NID Unit Test', p25_o25_nid_test)
+test('P25 o25 Framing Unit Test', p25_o25_framing_test)
 test('Codeplug Test',         cps_test)
 ## test('Linux InputStream Test', linux_inputStream_test)
 test('minmea conversion Test', minmea_conversion_test)
