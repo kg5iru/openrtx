@@ -16,12 +16,12 @@
 #include "protocols/YSF/Modulator.hpp"
 
 /**
- * Receive-only Yaesu System Fusion operating mode for the CS7000-M17 Plus.
- * The C4FM baseband is demodulated in software (protocols/YSF) from the same
- * receive path M17 uses; voice (V/D modes 1 and 2, AMBE+2 half rate) is
- * decoded by the codec of the stock firmware, through the queue and thread
- * the DMR mode uses (dmr_audio_CS7000).  Voice full rate (VW, IMBE) is not
- * decoded.  Transmit is not implemented.
+ * Yaesu System Fusion operating mode for the CS7000-M17 Plus.  The C4FM
+ * baseband goes through the same paths M17 uses, (de)modulated in software
+ * (protocols/YSF).  Voice (V/D modes 1 and 2 received, mode 2 sent; AMBE+2
+ * half rate) goes through the codec of the stock firmware, with the queues
+ * and threads the DMR mode uses (dmr_audio_CS7000).  Voice full rate (VW,
+ * IMBE) is not decoded.
  */
 class OpMode_YSF : public OpMode
 {
@@ -54,12 +54,9 @@ private:
 
     bool enterRx;
     bool rxOn;
-    bool audioOn;
     pathId basebandPath;
     streamId basebandId;
-    pathId speakerPath;
     uint16_t framesSinceGood; ///< Frames since the last valid FICH
-    uint8_t idleTicks;        ///< Updates since the call ended
     uint8_t unlockedTicks;    ///< Updates without a lock during a call
     uint8_t lastDt;           ///< Data type of the last valid FICH
     uint8_t flywheel;         ///< Frames in a row decoded on lastDt
@@ -71,7 +68,6 @@ private:
     // Transmit
     bool transmitting;
     bool pttHeld;       ///< PTT pressed and already acted on
-    pathId micPath;     ///< Microphone path while transmitting
     uint8_t txFn;       ///< Frame number of the next communications frame
     uint32_t txFrames;  ///< Communications frames sent
     uint32_t txSilence; ///< Voice frames sent as silence (none encoded)

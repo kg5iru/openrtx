@@ -11,9 +11,10 @@
 #include "rtx/OpMode.hpp"
 
 /**
- * Receive-only DMR operating mode for the CS7000-M17 Plus.  Transmit is not
- * implemented.  Voice is decoded by the AMBE+2 codec extracted from the
- * stock firmware (see platform/drivers/vocoder).
+ * DMR operating mode for the CS7000-M17 Plus: voice receive and transmit,
+ * direct or through a repeater (woken up when needed), private calls, talker
+ * alias and GPS positions (digital APRS).  Voice goes through the AMBE+2
+ * codec of the stock firmware (see platform/drivers/vocoder).
  */
 class OpMode_DMR : public OpMode
 {
@@ -33,24 +34,21 @@ public:
     virtual bool rxSquelchOpen() override;
 
 private:
-    void stopRxAudio();
     void startTx(rtxStatus_t *const status);
+    void txStarted(rtxStatus_t *const status, const bool data);
     void finishTx(rtxStatus_t *const status);
+    void beginWakeup(rtxStatus_t *const status, const bool forData);
     void startWakeup(rtxStatus_t *const status);
     void updateWakeup(rtxStatus_t *const status, const bool ptt,
                       const bool bsLocked);
     bool startData(rtxStatus_t *const status);
 
     bool enterRx;
-    bool audioOn;
-    pathId rxAudioPath;
-    uint8_t idleTicks;   ///< Updates (30 ms) since the call ended
     bool transmitting;
     bool pttHeld;        ///< PTT pressed and already acted on
     uint16_t txTicks;    ///< Updates (30 ms) since the transmission started
     long long txStart;   ///< getTick() at the start of the transmission
     uint16_t stopTick;   ///< txTicks when the stop was requested, 0 = not yet
-    pathId micPath;      ///< Microphone path while transmitting
     uint8_t wakePhase;   ///< Repeater wake-up: 0 none, 1 sending, 2 waiting
     uint8_t wakeTries;   ///< Wake-ups sent for this PTT press
     uint8_t wakeTicks;   ///< Updates since the current wake-up phase began

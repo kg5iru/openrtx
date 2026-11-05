@@ -108,15 +108,11 @@ static constexpr uint8_t WAKE_TRIES = 3;
 
 OpMode_DMR::OpMode_DMR()
     : enterRx(true)
-    , audioOn(false)
-    , rxAudioPath(-1)
-    , idleTicks(0)
     , transmitting(false)
     , pttHeld(false)
     , txTicks(0)
     , txStart(0)
     , stopTick(0)
-    , micPath(-1)
     , wakePhase(WAKE_NONE)
     , wakeTries(0)
     , wakeTicks(0)
@@ -138,7 +134,6 @@ OpMode_DMR::~OpMode_DMR()
 void OpMode_DMR::enable()
 {
     enterRx = true;
-    audioOn = false;
     transmitting = false;
     pttHeld = false;
     wakePhase = WAKE_NONE;
@@ -153,9 +148,6 @@ void OpMode_DMR::disable()
 
     if (transmitting) {
         dmrAudio_stopTx();
-        if (micPath >= 0)
-            audioPath_release(micPath);
-        micPath = -1;
         dmr_endTx((uint32_t)(getTick() - txStart));
         dmrDiag_txEnd();
         transmitting = false;
@@ -165,7 +157,7 @@ void OpMode_DMR::disable()
         dmr_endTx(0);
     wakePhase = WAKE_NONE;
 
-    stopRxAudio();
+    dmrAudio_speakerOff();
 
     dmr_terminate();
     radio_disableRtx();
@@ -196,29 +188,9 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         enterRx = false;
     }
 
-    /*
-     * Squelch: the speaker path (and with it the audio amplifier) is open
-     * only during a call and while its last frames play out.  Up to v34 it
-     * stayed open for the whole mode and the amplifier hissed between calls.
-     */
-    bool active = !transmitting && (rxSquelchOpen() || (dmrAudio_queued() > 0));
-    if (active)
-        idleTicks = 0;
-    else if (idleTicks < 255)
-        idleTicks++;
-
-    if (active && !audioOn) {
-        rxAudioPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
-        if ((rxAudioPath > 0) && dmrAudio_start(rxAudioPath))
-            audioOn = true;
-        else if (rxAudioPath > 0)
-            audioPath_release(rxAudioPath);
-    } else if (!active && audioOn && (idleTicks >= 10)) {
-        // 300 ms after the call: the jitter buffer has played out
-        dmrAudio_stop();
-        audioPath_release(rxAudioPath);
-        audioOn = false;
-    }
+    // Speaker open during a call and while its last frames play out
+    if (!transmitting)
+        dmrAudio_squelch(rxSquelchOpen());
 
     /*
      * Transmit.  A press of the PTT starts one transmission; releasing it, or
@@ -244,10 +216,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         else if ((status->dmrTimeslot != 0) && !bsLocked) {
             if (dmr_bsTail())
                 LOG_I("dmr", "repeater ending a call: waking it up");
-            wakeTries = 0;
-            wakeStart = getTick();
-            wakeForData = false;
-            startWakeup(status);
+            beginWakeup(status, false);
         } else {
             if (status->dmrTimeslot != 0)
                 LOG_I("dmr", "repeater on the air: no wake-up");
@@ -275,10 +244,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         } else if (state.gps_data.fix_quality == 0) {
             LOG_W("dmr", "APRS: no GPS fix, position not sent");
         } else if ((status->dmrTimeslot != 0) && !bsLocked) {
-            wakeTries = 0;
-            wakeStart = getTick();
-            wakeForData = true;
-            startWakeup(status);
+            beginWakeup(status, true);
         } else {
             startData(status);
         }
@@ -294,10 +260,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         if ((txTicks == 10) && dmr_txAligning()) {
             LOG_W("dmr", "repeater slot not found in 300 ms: waking it up");
             finishTx(status);
-            wakeTries = 0;
-            wakeStart = getTick();
-            wakeForData = true;
-            startWakeup(status);
+            beginWakeup(status, true);
         } else if (dmr_txDone() || (txTicks >= 67)) {
             if (!dmr_txDone())
                 LOG_W("dmr", "position not sent within 2 s: forced end");
@@ -316,12 +279,8 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         if ((txTicks == 10) && dmr_txAligning()) {
             LOG_W("dmr", "repeater slot not found in 300 ms: waking it up");
             finishTx(status);
-            if (ptt) {
-                wakeTries = 0;
-                wakeStart = getTick();
-                wakeForData = false;
-                startWakeup(status);
-            }
+            if (ptt)
+                beginWakeup(status, false);
             sleepFor(0u, 30u);
             return;
         }
@@ -350,33 +309,16 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     sleepFor(0u, 30u);
 }
 
-void OpMode_DMR::stopRxAudio()
-{
-    if (audioOn) {
-        dmrAudio_stop();
-        audioPath_release(rxAudioPath);
-        audioOn = false;
-    }
-}
-
 void OpMode_DMR::startTx(rtxStatus_t *const status)
 {
     // A lock-up while transmitting resets the radio after 5 s, unkeying it
     dmrDiag_startWatchdog();
     dmrDiag_txStart();
 
-    stopRxAudio();
+    dmrAudio_speakerOff();
 
-    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
-    if (micPath < 0)
-        LOG_W("dmr", "PTT: no microphone path (%d), sending the test vowel",
-              micPath);
-
-    if (!dmrAudio_startTx(micPath, status->dmrMicGain)) {
+    if (!dmrAudio_startTx(status->dmrMicGain)) {
         LOG_W("dmr", "PTT: no voice encoder (codec missing or damaged)");
-        if (micPath >= 0)
-            audioPath_release(micPath);
-        micPath = -1;
         dmrDiag_txEnd();
         return;
     }
@@ -412,23 +354,28 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
         alias = aliasBuf;
     }
 
-    if (status->dmrTimeslot != 0) {
-        // Through the repeater: the driver takes the slot timing from the
-        // receiver before the RF chain leaves it
-        dmr_startTx(status->dmrRadioId, dst, status->dmrTimeslot, priv, alias);
-        radio_disableRtx();
-        radio_enableTx();
-        dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
-    } else {
-        radio_disableRtx();
-        radio_enableTx();
-        dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
+    /*
+     * Through a repeater the driver takes the slot timing from the receiver
+     * before the RF chain leaves it: the driver first, then the keying.
+     * Direct: the keying first.
+     */
+    uint8_t ts = status->dmrTimeslot;
+    if (ts != 0)
+        dmr_startTx(status->dmrRadioId, dst, ts, priv, alias);
+    radio_disableRtx();
+    radio_enableTx();
+    dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
+    if (ts == 0)
         dmr_startTx(status->dmrRadioId, dst, 0, priv, alias);
-    }
 
+    txStarted(status, false);
+}
+
+void OpMode_DMR::txStarted(rtxStatus_t *const status, const bool data)
+{
     status->opStatus = TX;
     transmitting = true;
-    txIsData = false;
+    txIsData = data;
     txTicks = 0;
     stopTick = 0;
     txStart = getTick();
@@ -439,9 +386,6 @@ void OpMode_DMR::finishTx(rtxStatus_t *const status)
 {
     dmrDiag_set(DIAG_STAGE, STAGE_FINISHING);
     dmrAudio_stopTx();
-    if (micPath >= 0)
-        audioPath_release(micPath);
-    micPath = -1;
     dmr_endTx((uint32_t)(getTick() - txStart));
     radio_disableRtx();
     radio_enableRx();
@@ -457,10 +401,18 @@ void OpMode_DMR::finishTx(rtxStatus_t *const status)
     txIsData = false;
 }
 
+void OpMode_DMR::beginWakeup(rtxStatus_t *const status, const bool forData)
+{
+    wakeTries = 0;
+    wakeStart = getTick();
+    wakeForData = forData;
+    startWakeup(status);
+}
+
 void OpMode_DMR::startWakeup(rtxStatus_t *const status)
 {
     dmrDiag_startWatchdog();
-    stopRxAudio();
+    dmrAudio_speakerOff();
     radio_disableRtx();
     radio_enableTx();
     dmr_startWakeup(status->dmrRadioId);
@@ -530,19 +482,19 @@ bool OpMode_DMR::startData(rtxStatus_t *const status)
 
     dmrDiag_startWatchdog();
     dmrDiag_txStart();
-    stopRxAudio();
+    dmrAudio_speakerOff();
 
-    bool ok;
-    if (status->dmrTimeslot != 0) {
-        ok = dmr_startData(status->dmrRadioId, status->dmrAprsId,
-                           status->dmrTimeslot, true, msg, len);
-        if (ok) {
-            radio_disableRtx();
-            radio_enableTx();
-        }
-    } else {
+    // Keying and driver in the same order as for voice (startTx)
+    uint8_t ts = status->dmrTimeslot;
+    bool ok = true;
+    if (ts != 0)
+        ok = dmr_startData(status->dmrRadioId, status->dmrAprsId, ts, true, msg,
+                           len);
+    if (ok) {
         radio_disableRtx();
         radio_enableTx();
+    }
+    if (ok && (ts == 0)) {
         ok = dmr_startData(status->dmrRadioId, status->dmrAprsId, 0, true, msg,
                            len);
         if (!ok) {
@@ -559,14 +511,7 @@ bool OpMode_DMR::startData(rtxStatus_t *const status)
     LOG_I("dmr", "APRS: position %u to %lu", aprsIpId,
           (unsigned long)status->dmrAprsId);
     aprsIpId++;
-    micPath = -1;
-    status->opStatus = TX;
-    transmitting = true;
-    txIsData = true;
-    txTicks = 0;
-    stopTick = 0;
-    txStart = getTick();
-    platform_ledOn(RED);
+    txStarted(status, true);
     return true;
 }
 

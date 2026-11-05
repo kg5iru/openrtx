@@ -15,19 +15,24 @@
 extern "C" {
 #endif
 
-/**
- * Start the AMBE+2 receive audio thread (DMR and YSF).  It takes the voice
- * frames queued with dmrAudio_pushFrame(), runs them through the AMBE+2
- * decoder and plays the result on the given (already requested) MCU ->
- * speaker audio path.
- * Requires CS7000_AMBE and the codec blob (see platform/drivers/vocoder).
- *
- * @return true if the thread was started.
+/*
+ * AMBE+2 voice for the DMR and YSF modes of the CS7000.  Requires CS7000_AMBE
+ * and the codec of the stock firmware (see platform/drivers/vocoder).
  */
-bool dmrAudio_start(const pathId path);
 
-/** Stop the thread and wait for it to terminate. */
-void dmrAudio_stop();
+/**
+ * Receive audio squelch, to be called at every update of the mode while
+ * receiving.  While a call is on, or received frames are queued, the speaker
+ * path is open and a thread runs the frames queued with dmrAudio_pushFrame()
+ * through the AMBE+2 decoder to the speaker; 300 ms after the last of them
+ * both are stopped, so that the audio amplifier does not hiss between calls.
+ *
+ * @param call: a call is being received.
+ */
+void dmrAudio_squelch(const bool call);
+
+/** Close the speaker path at once (to transmit, or on leaving the mode). */
+void dmrAudio_speakerOff();
 
 /**
  * Queue one received AMBE+2 frame (9 bytes, 72 bits in DMR layout) for
@@ -41,23 +46,25 @@ bool dmrAudio_pushFrame(const uint8_t frame[9]);
 unsigned dmrAudio_queued();
 
 /**
- * Start the transmit encoder: AMBE+2 frames are produced into a queue that
- * the DMR driver empties, 3 frames per voice burst.  Returns false when the
- * codec is not available.
+ * Start the transmit encoder: the microphone path is opened and AMBE+2 frames
+ * are produced into a queue that the mode empties (DMR: 3 frames per voice
+ * burst, YSF: 5 per frame).  Without a microphone path a synthetic test vowel
+ * is encoded instead (bring-up aid).
  *
- * @param micPath: open microphone path (SOURCE_MIC to SINK_MCU), or -1 for
- * the synthetic test vowel.
  * @param gainStep: microphone gain, 0..8 for -12 .. +12 dB in 3 dB steps
  * around CONFIG_MIC_GAIN (4 = 0 dB).
+ * @return false when the codec is not available.
  */
-bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep);
+bool dmrAudio_startTx(const uint8_t gainStep);
 
-/** Stop the transmit encoder. */
+/** Stop the transmit encoder and release the microphone path. */
 void dmrAudio_stopTx();
 
 /**
- * Take the next encoded frame (9 bytes, DMR layout) for transmission; false
- * when none is ready.  Called from the DMR slot interrupt.
+ * Take the next encoded frame (9 bytes, DMR layout) for transmission.  Called
+ * from the DMR slot interrupt, or by the YSF mode.
+ *
+ * @return false, with an AMBE+2 silence frame in frame, when none is ready.
  */
 bool dmrAudio_popTxFrame(uint8_t frame[9]);
 

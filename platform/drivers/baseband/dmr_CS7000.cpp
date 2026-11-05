@@ -544,9 +544,6 @@ enum : uint8_t {
 
 static constexpr uint8_t TX_HEADERS = 3;
 
-static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
-                                        0x73, 0x00, 0x2A, 0x6B };
-
 static volatile uint8_t txState = TX_OFF;
 static volatile bool txStopReq = false;
 static uint8_t txLc[9];
@@ -715,11 +712,8 @@ static void loadVoice()
 {
     uint8_t voice[27];
     for (int i = 0; i < 3; i++) {
-        if (!dmrAudio_popTxFrame(&voice[9 * i])) {
-            for (int k = 0; k < 9; k++)
-                voice[(9 * i) + k] = ambeSilence[k];
+        if (!dmrAudio_popTxFrame(&voice[9 * i]))
             txUnderruns++;
-        }
     }
 
     if (txBursts < 2) {

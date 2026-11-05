@@ -29,8 +29,6 @@ using namespace YSF;
  */
 static constexpr uint8_t TX_FRAME_TOTAL = 6;
 static constexpr uint32_t TX_TIMEOUT_FRAMES = 1800;
-static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
-                                        0x73, 0x00, 0x2A, 0x6B };
 
 // Baseband buffer: two halves of 20 ms at 24 kHz, as the M17 mode uses
 static constexpr size_t BB_HALF = Demodulator::RX_SAMPLE_RATE / 50;
@@ -67,18 +65,14 @@ bool ysf_getCallInfo(ysfCallInfo_t *out)
 OpMode_YSF::OpMode_YSF()
     : enterRx(false)
     , rxOn(false)
-    , audioOn(false)
     , basebandPath(-1)
     , basebandId(-1)
-    , speakerPath(-1)
     , framesSinceGood(0)
-    , idleTicks(0)
     , unlockedTicks(0)
     , lastDt(0)
     , flywheel(0)
     , transmitting(false)
     , pttHeld(false)
-    , micPath(-1)
     , txFn(0)
     , txFrames(0)
     , txSilence(0)
@@ -101,7 +95,6 @@ void OpMode_YSF::enable()
     callActive = false;
     enterRx = true;
     rxOn = false;
-    audioOn = false;
     transmitting = false;
     pttHeld = false;
 }
@@ -115,20 +108,13 @@ void OpMode_YSF::disable()
         LOG_W("ysf", "tx cut short by a mode or channel change: %lu frames",
               (unsigned long)txFrames);
         dmrAudio_stopTx();
-        if (micPath >= 0)
-            audioPath_release(micPath);
-        micPath = -1;
         modulator.reset();
         transmitting = false;
         dmrDiag_txEnd();
     }
 
     stopRx();
-    if (audioOn) {
-        dmrAudio_stop();
-        audioPath_release(speakerPath);
-        audioOn = false;
-    }
+    dmrAudio_speakerOff();
 
     radio_disableRtx();
     callActive = false;
@@ -228,29 +214,8 @@ void OpMode_YSF::update(rtxStatus_t *const status, const bool newCfg)
         sleepFor(0u, 30u);
     }
 
-    /*
-     * Squelch: the speaker path (and the audio amplifier) is open only during
-     * a call and while its last frames play out, so that the amplifier does
-     * not hiss between calls.
-     */
-    bool active = callActive || (dmrAudio_queued() > 0);
-    if (active)
-        idleTicks = 0;
-    else if (idleTicks < 255)
-        idleTicks++;
-
-    if (active && !audioOn) {
-        speakerPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
-        if ((speakerPath > 0) && dmrAudio_start(speakerPath))
-            audioOn = true;
-        else if (speakerPath > 0)
-            audioPath_release(speakerPath);
-    } else if (!active && audioOn && (idleTicks >= 15)) {
-        // 300 ms after the call (updates are 20 ms apart while receiving)
-        dmrAudio_stop();
-        audioPath_release(speakerPath);
-        audioOn = false;
-    }
+    // Speaker open during a call and while its last frames play out
+    dmrAudio_squelch(callActive);
 
     if (rxSquelchOpen())
         platform_ledOn(GREEN);
@@ -419,23 +384,15 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
     if (callActive)
         endCall("transmit");
     stopRx();
-    if (audioOn) {
-        dmrAudio_stop();
-        audioPath_release(speakerPath);
-        audioOn = false;
-    }
+    dmrAudio_speakerOff();
 
     // As for DMR: a stall of the RTX thread resets the radio, and a reset
     // during the transmission is reported at the next start
     dmrDiag_startWatchdog();
     dmrDiag_txStart();
 
-    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
-    if (!dmrAudio_startTx(micPath, status->dmrMicGain)) {
+    if (!dmrAudio_startTx(status->dmrMicGain)) {
         LOG_W("ysf", "PTT: no voice encoder (codec missing or damaged)");
-        if (micPath >= 0)
-            audioPath_release(micPath);
-        micPath = -1;
         dmrDiag_txEnd();
         startRx();
         return;
@@ -463,9 +420,6 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
         modulator.reset();
         radio_disableRtx();
         dmrAudio_stopTx();
-        if (micPath >= 0)
-            audioPath_release(micPath);
-        micPath = -1;
         dmrDiag_txEnd();
         startRx();
         return;
@@ -522,10 +476,8 @@ void OpMode_YSF::sendVoiceFrame()
 
     for (size_t n = 0; n < 5; n++) {
         uint8_t ambe[9];
-        if (!dmrAudio_popTxFrame(ambe)) {
-            memcpy(ambe, ambeSilence, sizeof(ambe));
+        if (!dmrAudio_popTxFrame(ambe)) // silence if none
             txSilence++;
-        }
         encodeVd2Voice(ambe, n, frame);
     }
 
@@ -542,9 +494,6 @@ void OpMode_YSF::endTx(rtxStatus_t *const status)
     modulator->stop(); // returns once the terminator has gone out
 
     dmrAudio_stopTx();
-    if (micPath >= 0)
-        audioPath_release(micPath);
-    micPath = -1;
     modulator.reset();
 
     radio_disableRtx();

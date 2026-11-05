@@ -31,75 +31,122 @@
 #include "hwconfig.h"
 
 /*
- * Received AMBE+2 frames waiting to be played, 9 bytes each in DMR layout.
- * Single producer (the DMR interrupt, or the YSF mode's thread; only one mode
- * runs at a time), single consumer (the decode thread).
+ * Queue of AMBE+2 frames, 9 bytes each in DMR layout, for a single producer
+ * and a single consumer (an interrupt may be either).
  */
-static constexpr unsigned QUEUE_FRAMES = 32;
-static uint8_t frameQueue[QUEUE_FRAMES][9];
-static volatile unsigned qHead = 0; // written by the producer
-static volatile unsigned qTail = 0; // written by the decode thread
+template <unsigned N>
+class FrameQueue
+{
+public:
+    bool push(const uint8_t frame[9])
+    {
+        unsigned next = (head + 1) % N;
+        if (next == tail)
+            return false;
+        memcpy(frames[head], frame, 9);
+        head = next;
+        return true;
+    }
+
+    bool pop(uint8_t frame[9])
+    {
+        if (tail == head)
+            return false;
+        memcpy(frame, frames[tail], 9);
+        tail = (tail + 1) % N;
+        return true;
+    }
+
+    unsigned count() const
+    {
+        return (head + N - tail) % N;
+    }
+
+    void clear()
+    {
+        head = 0;
+        tail = 0;
+    }
+
+private:
+    uint8_t frames[N][9];
+    volatile unsigned head = 0; // written by the producer
+    volatile unsigned tail = 0; // written by the consumer
+};
+
+/*
+ * Received frames waiting to be played: the DMR interrupt or the YSF mode's
+ * thread (only one mode runs at a time) to the decode thread.
+ */
+static FrameQueue<32> rxQueue;
+
+/*
+ * Encoded frames waiting to be transmitted: the encode thread to the DMR
+ * slot interrupt (3 frames per voice burst) or the YSF mode (5 per frame).
+ */
+static FrameQueue<16> txQueue;
+
+// AMBE+2 silence, sent when the encoder has no frame ready
+static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
+                                        0x73, 0x00, 0x2A, 0x6B };
 
 bool dmrAudio_pushFrame(const uint8_t frame[9])
 {
-    unsigned next = (qHead + 1) % QUEUE_FRAMES;
-    if (next == qTail)
-        return false;
-    for (int i = 0; i < 9; i++)
-        frameQueue[qHead][i] = frame[i];
-    qHead = next;
-    return true;
+    return rxQueue.push(frame);
 }
 
 unsigned dmrAudio_queued()
 {
-    return (qHead + QUEUE_FRAMES - qTail) % QUEUE_FRAMES;
-}
-
-static bool popFrame(uint8_t frame[9])
-{
-    if (qTail == qHead)
-        return false;
-    for (int i = 0; i < 9; i++)
-        frame[i] = frameQueue[qTail][i];
-    qTail = (qTail + 1) % QUEUE_FRAMES;
-    return true;
-}
-
-/*
- * Encoded AMBE+2 frames waiting to be transmitted.  Single producer (the
- * encode thread), single consumer (the DMR slot interrupt, 3 frames per
- * voice burst).
- */
-static constexpr unsigned TX_QUEUE_FRAMES = 16;
-static uint8_t txQueue[TX_QUEUE_FRAMES][9];
-static volatile unsigned txHead = 0;
-static volatile unsigned txTail = 0;
-
-static unsigned txQueued()
-{
-    return (txHead + TX_QUEUE_FRAMES - txTail) % TX_QUEUE_FRAMES;
+    return rxQueue.count();
 }
 
 bool dmrAudio_popTxFrame(uint8_t frame[9])
 {
-    if (txTail == txHead)
-        return false;
-    for (int i = 0; i < 9; i++)
-        frame[i] = txQueue[txTail][i];
-    txTail = (txTail + 1) % TX_QUEUE_FRAMES;
-    return true;
+    if (txQueue.pop(frame))
+        return true;
+    memcpy(frame, ambeSilence, sizeof(ambeSilence));
+    return false;
 }
 
-static bool pushTxFrame(const uint8_t frame[9])
+static bool audioStart(const pathId path);
+static void audioStop();
+
+/*
+ * Speaker squelch, shared by the DMR and YSF modes: the speaker path (and the
+ * audio amplifier) is open only during a call and while its last frames play
+ * out, so that the amplifier does not hiss between calls (up to v34 it stayed
+ * open for the whole mode).
+ */
+static constexpr long long SPEAKER_HANG_MS = 300;
+static pathId speakerPath = -1;
+static bool speakerOn = false;
+static long long lastActive = 0;
+
+void dmrAudio_squelch(const bool call)
 {
-    unsigned next = (txHead + 1) % TX_QUEUE_FRAMES;
-    if (next == txTail)
-        return false;
-    for (int i = 0; i < 9; i++)
-        txQueue[txHead][i] = frame[i];
-    txHead = next;
-    return true;
+    bool active = call || (rxQueue.count() > 0);
+    if (active)
+        lastActive = getTick();
+
+    if (active && !speakerOn) {
+        speakerPath = audioPath_request(SOURCE_MCU, SINK_SPK, PRIO_RX);
+        if ((speakerPath > 0) && audioStart(speakerPath))
+            speakerOn = true;
+        else if (speakerPath > 0)
+            audioPath_release(speakerPath);
+    } else if (!active && speakerOn
+               && ((getTick() - lastActive) >= SPEAKER_HANG_MS)) {
+        dmrAudio_speakerOff();
+    }
+}
+
+void dmrAudio_speakerOff()
+{
+    if (!speakerOn)
+        return;
+    audioStop();
+    audioPath_release(speakerPath);
+    speakerOn = false;
 }
 
 #ifdef CS7000_AMBE
@@ -108,7 +155,21 @@ static bool pushTxFrame(const uint8_t frame[9])
 
 #define FRAME_SAMPLES AMBE_CS7000_FRAME_SAMPLES
 #define DMA_BUF_SAMPLES (FRAME_SAMPLES * 2)
-#define DEC_STACK_SIZE 16384  /* codec needs 4.2 kB measured; same as Codec2 */
+#define DEC_STACK_SIZE 16384 /* codec needs 4.2 kB measured; same as Codec2 */
+
+// Codec threads (decode, encode): high priority, as the Codec2 thread
+static bool startThread(pthread_t *t, void *(*fn)(void *))
+{
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, DEC_STACK_SIZE);
+
+    struct sched_param param;
+    param.sched_priority = THREAD_PRIO_HIGH;
+    pthread_attr_setschedparam(&attr, &param);
+
+    return pthread_create(t, &attr, fn, NULL) == 0;
+}
 
 static ambe_cs7000_t decoder; /* ~10 kB, too big for the stack */
 static pthread_t thread;
@@ -156,9 +217,9 @@ static void *decodeThread(void *arg)
         // Jitter buffer: start (or restart after running dry) only once six
         // frames (120 ms: two DMR bursts, more than one YSF frame) are
         // queued, so that the bursty arrival does not insert silence.
-        if (!playing && dmrAudio_queued() >= 6)
+        if (!playing && rxQueue.count() >= 6)
             playing = true;
-        bool have = playing && popFrame(frame);
+        bool have = playing && rxQueue.pop(frame);
         if (playing && !have)
             playing = false;
 
@@ -261,7 +322,7 @@ static void encodeVowel()
     uint8_t frame[9];
 
     while (!txReqStop) {
-        if (txQueued() >= 4) {
+        if (txQueue.count() >= 4) {
             sleepFor(0u, 5u);
             continue;
         }
@@ -273,7 +334,7 @@ static void encodeVowel()
         txFramesEncoded++;
         dmrDiag_set(DIAG_ENC, txFramesEncoded);
 
-        pushTxFrame(frame);
+        txQueue.push(frame);
     }
 }
 
@@ -358,7 +419,7 @@ static void encodeMic()
         txFramesEncoded++;
         dmrDiag_set(DIAG_ENC, txFramesEncoded);
 
-        if (!pushTxFrame(frame))
+        if (!txQueue.push(frame))
             txDropped++;
     }
 
@@ -392,30 +453,28 @@ static void *encodeThread(void *arg)
     return NULL;
 }
 
-bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep)
+bool dmrAudio_startTx(const uint8_t gainStep)
 {
     if (txRunning || (dmrAudio_codecStatus() != DMR_CODEC_OK))
         return false;
 
-    txMicPath = micPath;
+    txMicPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    if (txMicPath < 0)
+        LOG_W("ambe", "no microphone path (%d), sending the test vowel",
+              txMicPath);
+
     txGain = (int32_t)CONFIG_MIC_GAIN
            * gainSteps[(gainStep < 9) ? gainStep : 4];
 
-    txHead = 0;
-    txTail = 0;
+    txQueue.clear();
     txReqStop = false;
     txRunning = true;
 
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, DEC_STACK_SIZE);
-
-    struct sched_param param;
-    param.sched_priority = THREAD_PRIO_HIGH;
-    pthread_attr_setschedparam(&attr, &param);
-
-    if (pthread_create(&txThread, &attr, encodeThread, NULL) != 0) {
+    if (!startThread(&txThread, encodeThread)) {
         txRunning = false;
+        if (txMicPath >= 0)
+            audioPath_release(txMicPath);
+        txMicPath = -1;
         return false;
     }
 
@@ -424,14 +483,16 @@ bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep)
 
 void dmrAudio_stopTx()
 {
-    if (!txRunning)
-        return;
-
-    txReqStop = true;
-    pthread_join(txThread, NULL);
+    if (txRunning) {
+        txReqStop = true;
+        pthread_join(txThread, NULL);
+    }
+    if (txMicPath >= 0)
+        audioPath_release(txMicPath);
+    txMicPath = -1;
 }
 
-bool dmrAudio_start(const pathId path)
+static bool audioStart(const pathId path)
 {
     // A damaged codec region would crash on the first voice frame.
     if (running || (dmrAudio_codecStatus() != DMR_CODEC_OK))
@@ -441,15 +502,7 @@ bool dmrAudio_start(const pathId path)
     reqStop = false;
     running = true;
 
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, DEC_STACK_SIZE);
-
-    struct sched_param param;
-    param.sched_priority = THREAD_PRIO_HIGH; // as the Codec2 thread
-    pthread_attr_setschedparam(&attr, &param);
-
-    if (pthread_create(&thread, &attr, decodeThread, NULL) != 0) {
+    if (!startThread(&thread, decodeThread)) {
         running = false;
         return false;
     }
@@ -457,7 +510,7 @@ bool dmrAudio_start(const pathId path)
     return true;
 }
 
-void dmrAudio_stop()
+static void audioStop()
 {
     if (!running)
         return;
@@ -497,19 +550,18 @@ uint8_t dmrAudio_codecStatus()
     return DMR_CODEC_MISSING;
 }
 
-bool dmrAudio_start(const pathId path)
+static bool audioStart(const pathId path)
 {
     (void)path;
     return false;
 }
 
-void dmrAudio_stop()
+static void audioStop()
 {
 }
 
-bool dmrAudio_startTx(const pathId micPath, const uint8_t gainStep)
+bool dmrAudio_startTx(const uint8_t gainStep)
 {
-    (void)micPath;
     (void)gainStep;
     return false;
 }
