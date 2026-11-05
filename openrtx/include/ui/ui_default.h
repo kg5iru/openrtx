@@ -158,7 +158,9 @@ enum settingsDMRItems
     DMR_TIMESLOT,
     DMR_TALKGROUP,
     DMR_RADIO_ID,
-    DMR_MIC_GAIN
+    DMR_MIC_GAIN,
+    DMR_PRIVATE_ID,
+    DMR_TALKER_ALIAS
 };
 #endif
 

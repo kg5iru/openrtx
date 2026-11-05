@@ -133,17 +133,25 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             dmrCallInfo_t call;
             if(dmr_getCallInfo(&call))
             {
-                gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "ID %lu", (unsigned long) call.src);
+                // The talker alias (callsign) once received, else the ID
+                if(call.alias[0] != '\0')
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "%s",
+                              call.alias);
+                else
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "ID %lu",
+                              (unsigned long) call.src);
+                // Group call: TG <talkgroup>; private call: PC <ID>
                 if(call.slot != 0)
                     gfx_print(layout.line2_pos, layout.line2_font,
                               TEXT_ALIGN_CENTER, color_white, "TS%u %s %lu",
-                              call.slot, (call.flco == 0) ? "TG" : "ID",
+                              call.slot, (call.flco == 0) ? "TG" : "PC",
                               (unsigned long) call.dst);
                 else
                     gfx_print(layout.line2_pos, layout.line2_font,
                               TEXT_ALIGN_CENTER, color_white, "%s %lu",
-                              (call.flco == 0) ? "TG" : "ID",
+                              (call.flco == 0) ? "TG" : "PC",
                               (unsigned long) call.dst);
             }
             else
@@ -152,6 +160,11 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                 if(last_state.settings.dmr_id == 0)
                     gfx_print(layout.line1_pos, layout.line2_font,
                               TEXT_ALIGN_CENTER, color_white, "No Radio ID");
+                // PTT makes a private call (Settings > DMR > Private Call)
+                else if(last_state.settings.dmr_privId != 0)
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "Private %lu",
+                              (unsigned long) last_state.settings.dmr_privId);
 
                 // Idle: colour code, timeslot and talkgroup filters
                 uint8_t cc = settings_dmrColourCode(&last_state.settings);

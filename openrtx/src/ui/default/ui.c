@@ -187,7 +187,9 @@ const char *settings_dmr_items[] =
     "Timeslot",
     "Talkgroup",
     "Radio ID",
-    "Mic Gain"
+    "Mic Gain",
+    "Private Call",
+    "Talker Alias"
 };
 #endif
 
@@ -2537,6 +2539,17 @@ void ui_updateFSM(bool *sync_rtx)
                             ui_state.edit_mode = false;
                         *sync_rtx = true;
                     }
+                    else if(ui_state.menu_selected == DMR_TALKER_ALIAS)
+                    {
+                        if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        else if(msg.keys & KEY_DOWN || msg.keys & KEY_UP ||
+                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
+                                msg.keys & KNOB_LEFT || msg.keys & KNOB_RIGHT)
+                            state.settings.dmr_taOff =
+                                (state.settings.dmr_taOff == 0) ? 1 : 0;
+                        *sync_rtx = true;
+                    }
                     else if(ui_state.menu_selected == DMR_COLOUR_CODE)
                     {
                         uint8_t cc = settings_dmrColourCode(&state.settings);
@@ -2550,7 +2563,8 @@ void ui_updateFSM(bool *sync_rtx)
                             ui_state.edit_mode = false;
                         *sync_rtx = true;
                     }
-                    else // DMR_TALKGROUP, DMR_RADIO_ID: digits, 0 or empty = none
+                    else // DMR_TALKGROUP, DMR_RADIO_ID, DMR_PRIVATE_ID:
+                         // digits, 0 or empty = none
                     {
                         size_t len = strnlen(ui_state.new_dmr_tg,
                                              sizeof(ui_state.new_dmr_tg));
@@ -2563,6 +2577,8 @@ void ui_updateFSM(bool *sync_rtx)
                                 tg = 16777215;
                             if(ui_state.menu_selected == DMR_RADIO_ID)
                                 state.settings.dmr_id = tg;
+                            else if(ui_state.menu_selected == DMR_PRIVATE_ID)
+                                state.settings.dmr_privId = tg;
                             else
                                 state.settings.dmr_rxTg = tg;
                             ui_state.edit_mode = false;
@@ -2591,7 +2607,8 @@ void ui_updateFSM(bool *sync_rtx)
                 {
                     ui_state.edit_mode = true;
                     if((ui_state.menu_selected == DMR_TALKGROUP) ||
-                       (ui_state.menu_selected == DMR_RADIO_ID))
+                       (ui_state.menu_selected == DMR_RADIO_ID) ||
+                       (ui_state.menu_selected == DMR_PRIVATE_ID))
                         memset(ui_state.new_dmr_tg, 0,
                                sizeof(ui_state.new_dmr_tg));
                 }
@@ -2615,6 +2632,13 @@ void ui_updateFSM(bool *sync_rtx)
                         settings_setDmrMicGainStep(&state.settings, g + 1);
                     else if((msg.keys & KEY_LEFT) && (g > 0))
                         settings_setDmrMicGainStep(&state.settings, g - 1);
+                    *sync_rtx = true;
+                }
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_TALKER_ALIAS))
+                {
+                    state.settings.dmr_taOff =
+                        (state.settings.dmr_taOff == 0) ? 1 : 0;
                     *sync_rtx = true;
                 }
                 else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
