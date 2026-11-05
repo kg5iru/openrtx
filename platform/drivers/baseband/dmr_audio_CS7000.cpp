@@ -69,7 +69,8 @@ public:
     }
 
 private:
-    uint8_t frames[N][9];
+    // Every member initialised: a static queue needs no startup constructor
+    uint8_t frames[N][9] = {};
     volatile unsigned head = 0; // written by the producer
     volatile unsigned tail = 0; // written by the consumer
 };
