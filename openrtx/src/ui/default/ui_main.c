@@ -230,8 +230,18 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
             }
             else
             {
+                // Idle: where the PTT sends (destination, DG-ID) and the
+                // RX DG-ID filter when set (Settings > YSF)
+                const settings_t *s = &last_state.settings;
+                uint8_t rxDgid = settings_ysfDgid(s->ysf_rxDgid);
+                if(rxDgid != 0)
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "RX DG%u",
+                              rxDgid);
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "YSF");
+                          color_white, "YSF %.10s DG%u",
+                          (s->ysf_dest[0] != '\0') ? s->ysf_dest : "ALL",
+                          settings_ysfDgid(s->ysf_txDgid));
             }
 
             #ifdef CONFIG_DMR_CS7000

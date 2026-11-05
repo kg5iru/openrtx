@@ -52,6 +52,9 @@ enum uiScreen
 #ifdef CONFIG_DMR_CS7000
     SETTINGS_DMR,
 #endif
+#ifdef CONFIG_YSF_CS7000
+    SETTINGS_YSF,
+#endif
     SETTINGS_FM,
     SETTINGS_ACCESSIBILITY,
     SETTINGS_RESET2DEFAULTS,
@@ -94,6 +97,9 @@ enum settingsItems
 #endif
 #ifdef CONFIG_DMR_CS7000
     S_DMR,
+#endif
+#ifdef CONFIG_YSF_CS7000
+    S_YSF,
 #endif
     S_FM,
     S_ACCESSIBILITY,
@@ -176,6 +182,21 @@ static inline bool ui_isDMRIdSetting(uint8_t item)
     return (item == DMR_TALKGROUP) || (item == DMR_RADIO_ID) ||
            (item == DMR_PRIVATE_ID) || (item == DMR_APRS_ID);
 }
+#endif
+
+#ifdef CONFIG_YSF_CS7000
+#ifndef CONFIG_DMR_CS7000
+#error "The YSF mode needs the DMR voice support (option cs7000_ambe)"
+#endif
+
+// Settings > YSF; the mic gain is the one the DMR mode uses
+enum settingsYSFItems
+{
+    YSF_DESTINATION = 0,
+    YSF_TX_DGID,
+    YSF_RX_DGID,
+    YSF_MIC_GAIN
+};
 #endif
 
 enum settingsFMItems
@@ -287,6 +308,10 @@ extern const char *settings_fm_items[];
 #ifdef CONFIG_DMR_CS7000
 extern const char *settings_dmr_items[];
 extern const uint8_t settings_dmr_num;
+#endif
+#ifdef CONFIG_YSF_CS7000
+extern const char *settings_ysf_items[];
+extern const uint8_t settings_ysf_num;
 #endif
 extern const char * settings_accessibility_items[];
 extern const char *backup_restore_items[];
