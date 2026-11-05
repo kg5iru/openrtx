@@ -51,6 +51,14 @@ jobs:
           name: openrtx_cs7000p_dmr_flat
           path: build_cm7_dmr/openrtx_cs7000p_bin
           if-no-files-found: error
+      - name: Upload ELF and link map (size analysis)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrtx_cs7000p_dmr_elf
+          path: |
+            build_cm7_dmr/openrtx_cs7000p
+            build_cm7_dmr/main.map
+          if-no-files-found: warn
       - name: Upload wrapped image (flash with the Factory Tool)
         uses: actions/upload-artifact@v4
         with:
