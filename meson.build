@@ -73,6 +73,7 @@ openrtx_inc = ['openrtx/include', 'platform']
 
 # Yaesu System Fusion receive protocol layer (CS7000-PLUS YSF mode, tests)
 ysf_src = ['openrtx/src/protocols/YSF/Coding.cpp',
+           'openrtx/src/protocols/YSF/FrameEncoder.cpp',
            'openrtx/src/protocols/YSF/FrameDecoder.cpp',
            'openrtx/src/protocols/YSF/Demodulator.cpp']
 
