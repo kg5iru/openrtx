@@ -44,8 +44,11 @@ unsigned dmrAudio_queued();
  * Start the transmit encoder: AMBE+2 frames are produced into a queue that
  * the DMR driver empties, 3 frames per voice burst.  Returns false when the
  * codec is not available.
+ *
+ * @param micPath: open microphone path (SOURCE_MIC to SINK_MCU), or -1 for
+ * the synthetic test vowel.
  */
-bool dmrAudio_startTx();
+bool dmrAudio_startTx(const pathId micPath);
 
 /** Stop the transmit encoder. */
 void dmrAudio_stopTx();

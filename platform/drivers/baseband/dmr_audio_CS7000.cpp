@@ -26,6 +26,9 @@
 #include "interfaces/delays.h"
 #include "drivers/baseband/dmr_diag_CS7000.h"
 #include <math.h>
+#include <stdlib.h>
+#include "core/dsp.h"
+#include "hwconfig.h"
 
 /*
  * Received AMBE+2 frames waiting to be played, 9 bytes each in DMR layout.
@@ -249,19 +252,15 @@ static void testVowel(int16_t *pcm, uint32_t frame)
     }
 }
 
-static void *encodeThread(void *arg)
-{
-    (void)arg;
+static pathId txMicPath = -1;
 
+// Bring-up test signal: frames paced by the TX queue (4 frames ahead)
+static void encodeVowel()
+{
     static int16_t pcm[FRAME_SAMPLES];
     uint8_t frame[9];
 
-    ambe_cs7000_init(&encoder);
-    txFramesEncoded = 0;
-    LOG_I("ambe", "encode thread started (test vowel)");
-
     while (!txReqStop) {
-        // Four frames ahead covers the next burst whatever the slot phase
         if (txQueued() >= 4) {
             sleepFor(0u, 5u);
             continue;
@@ -276,16 +275,116 @@ static void *encodeThread(void *arg)
 
         pushTxFrame(frame);
     }
+}
 
-    LOG_I("ambe", "encode thread stopped: %u frames", txFramesEncoded);
+/*
+ * Microphone: the same capture as the Codec2 encoder (core/audio_codec.c),
+ * 8 kHz oversampled CONFIG_MIC_OVERSAMPLE times, decimated, DC blocked and
+ * amplified by CONFIG_MIC_GAIN (saturated here), 160 samples per frame.
+ * Frames are paced by the microphone clock; the slot interrupt takes three
+ * every 60 ms, so the queue settles at about the 180 ms of the headers.
+ */
+static unsigned txDropped = 0;
+static int16_t txPeak = 0;
+
+static void encodeMic()
+{
+    const size_t bufLen = FRAME_SAMPLES * 2 * CONFIG_MIC_OVERSAMPLE;
+    stream_sample_t *adcBuf =
+        (stream_sample_t *)malloc(bufLen * sizeof(stream_sample_t));
+    if (adcBuf == NULL) {
+        LOG_E("ambe", "no memory for the microphone buffer");
+        return;
+    }
+
+    streamId iStream = audioStream_start(txMicPath, adcBuf, bufLen,
+                                         8000 * CONFIG_MIC_OVERSAMPLE,
+                                         STREAM_INPUT | BUF_CIRC_DOUBLE);
+    if (iStream < 0) {
+        LOG_E("ambe", "microphone stream start failed (%d)", iStream);
+        free(adcBuf);
+        return;
+    }
+
+    struct dcBlock dcBlock;
+    struct decimatorState decimator;
+    dsp_resetState(dcBlock);
+    dsp_resetState(decimator);
+
+    static int16_t pcm[FRAME_SAMPLES];
+    uint8_t frame[9];
+
+    while (!txReqStop) {
+        if (audioPath_getStatus(txMicPath) != PATH_OPEN)
+            break;
+
+        dataBlock_t audio = inputStream_getData(iStream);
+        if ((audio.data == NULL) || (audio.len == 0))
+            break;
+
+        size_t n = 0;
+        for (size_t i = 0; (i < audio.len) && (n < FRAME_SAMPLES); i++) {
+            int16_t sample = audio.data[i];
+#if CONFIG_MIC_OVERSAMPLE > 1
+            if (!dsp_decimator(&decimator, &sample, CONFIG_MIC_OVERSAMPLE))
+                continue;
+#endif
+            sample = dsp_dcBlockFilter(&dcBlock, sample);
+            int32_t v = (int32_t)sample * CONFIG_MIC_GAIN;
+            if (v > 32767)
+                v = 32767;
+            if (v < -32768)
+                v = -32768;
+            pcm[n++] = (int16_t)v;
+            int32_t a = (v < 0) ? -v : v;
+            if (a > txPeak)
+                txPeak = (int16_t)((a > 32767) ? 32767 : a);
+        }
+        while (n < FRAME_SAMPLES)
+            pcm[n++] = 0;
+
+        dmrDiag_set(DIAG_ENC, txFramesEncoded | 0x80000000u);
+        ambe_cs7000_encode(&encoder, pcm, frame);
+        txFramesEncoded++;
+        dmrDiag_set(DIAG_ENC, txFramesEncoded);
+
+        if (!pushTxFrame(frame))
+            txDropped++;
+    }
+
+    audioStream_terminate(iStream);
+    free(adcBuf);
+}
+
+static void *encodeThread(void *arg)
+{
+    (void)arg;
+
+    ambe_cs7000_init(&encoder);
+    txFramesEncoded = 0;
+    txDropped = 0;
+    txPeak = 0;
+
+    if (txMicPath >= 0) {
+        LOG_I("ambe", "encode thread started (microphone)");
+        encodeMic();
+    } else {
+        LOG_I("ambe", "encode thread started (test vowel)");
+        encodeVowel();
+    }
+
+    LOG_I("ambe", "encode thread stopped: %u frames, %u dropped, mic peak %d",
+          txFramesEncoded, txDropped, txPeak);
     txRunning = false;
     return NULL;
 }
 
-bool dmrAudio_startTx()
+bool dmrAudio_startTx(const pathId micPath)
 {
     if (txRunning || (dmrAudio_codecStatus() != DMR_CODEC_OK))
         return false;
+
+    txMicPath = micPath;
 
     txHead = 0;
     txTail = 0;
@@ -393,8 +492,9 @@ void dmrAudio_stop()
 {
 }
 
-bool dmrAudio_startTx()
+bool dmrAudio_startTx(const pathId micPath)
 {
+    (void)micPath;
     return false;
 }
 

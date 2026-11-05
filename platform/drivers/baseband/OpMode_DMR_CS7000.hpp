@@ -46,6 +46,7 @@ private:
     uint16_t txTicks;  ///< Updates (30 ms) since the transmission started
     long long txStart; ///< getTick() at the start of the transmission
     uint16_t stopTick; ///< txTicks when the stop was requested, 0 = not yet
+    pathId micPath;    ///< Microphone path while transmitting
 };
 
 #endif /* OPMODE_DMR_CS7000_H */

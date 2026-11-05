@@ -33,6 +33,7 @@ OpMode_DMR::OpMode_DMR()
     , txTicks(0)
     , txStart(0)
     , stopTick(0)
+    , micPath(-1)
 {
 }
 
@@ -55,6 +56,9 @@ void OpMode_DMR::disable()
 
     if (transmitting) {
         dmrAudio_stopTx();
+        if (micPath >= 0)
+            audioPath_release(micPath);
+        micPath = -1;
         dmr_endTx((uint32_t)(getTick() - txStart));
         dmrDiag_txEnd();
         transmitting = false;
@@ -172,8 +176,16 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
 
     stopRxAudio();
 
-    if (!dmrAudio_startTx()) {
+    micPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+    if (micPath < 0)
+        LOG_W("dmr", "PTT: no microphone path (%d), sending the test vowel",
+              micPath);
+
+    if (!dmrAudio_startTx(micPath)) {
         LOG_W("dmr", "PTT: no voice encoder (codec missing or damaged)");
+        if (micPath >= 0)
+            audioPath_release(micPath);
+        micPath = -1;
         dmrDiag_txEnd();
         return;
     }
@@ -200,6 +212,9 @@ void OpMode_DMR::finishTx(rtxStatus_t *const status)
 {
     dmrDiag_set(DIAG_STAGE, STAGE_FINISHING);
     dmrAudio_stopTx();
+    if (micPath >= 0)
+        audioPath_release(micPath);
+    micPath = -1;
     dmr_endTx((uint32_t)(getTick() - txStart));
     radio_disableRtx();
     radio_enableRx();
