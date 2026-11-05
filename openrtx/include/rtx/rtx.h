@@ -59,6 +59,8 @@ typedef struct
     uint8_t  dmrTimeslot;              /**< DMR RX timeslot, 0 = any   */
     uint32_t dmrRadioId;               /**< Own DMR ID, 0 = not set    */
     uint8_t  dmrMicGain;               /**< DMR mic gain step, 0..8    */
+    uint32_t dmrPrivateId;             /**< DMR private call ID, 0 = TG */
+    bool     dmrTalkerAlias;           /**< DMR: send callsign as alias */
 #endif
 }
 rtxStatus_t;

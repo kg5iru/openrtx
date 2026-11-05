@@ -57,6 +57,8 @@ typedef struct
     uint8_t dmr_ts;               // DMR timeslot to receive, 0 = any, 1 or 2
     uint32_t dmr_id;              // Own DMR radio ID, 0 = not set (no TX)
     uint8_t dmr_micGain;          // DMR mic gain step + 1, 0 = not set (0 dB)
+    uint32_t dmr_privId;          // DMR private call target, 0 = group calls
+    uint8_t dmr_taOff;            // 1 = don't send the DMR talker alias
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -92,6 +94,8 @@ static const settings_t default_settings =
     0,                            // Receive either DMR timeslot
     0,                            // DMR radio ID not set
     0,                            // DMR mic gain not set (0 dB)
+    0,                            // DMR group calls
+    0,                            // Send the DMR talker alias
 #endif
 };
 
