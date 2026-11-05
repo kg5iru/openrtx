@@ -4,23 +4,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/crc.h"
 #include "protocols/YSF/Coding.hpp"
 
 uint16_t YSF::crc16(const uint8_t *data, const size_t len)
 {
-    uint16_t crc = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        crc ^= static_cast<uint16_t>(data[i]) << 8;
-        for (int b = 0; b < 8; b++) {
-            if (crc & 0x8000)
-                crc = (crc << 1) ^ 0x1021;
-            else
-                crc <<= 1;
-        }
-    }
-
-    return ~crc;
+    // CRC-CCITT (polynomial 0x1021, initial value 0), inverted
+    return ~crc_ccitt(data, len);
 }
 
 bool YSF::checkCrc16(const uint8_t *data, const size_t len)
