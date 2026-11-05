@@ -1179,21 +1179,34 @@ void dmr_endTx(uint32_t elapsedMs)
     bool clean = (txState == TX_DONE);
     txState = TX_OFF;
 
-    // Transmission off (manual: reg 0x40 = 0x03), then passive reception
-    // with the steps dmrMode() starts it with
-    C6000.writeCfgRegister(0x41, 0x00);
-    C6000.writeCfgRegister(0x40, 0x03);
-    C6000.writeCfgRegister(0x56, 0x00);
-    C6000.writeCfgRegister(0x10, slotModeReg);
-    C6000.writeCfgRegister(0x41, 0x20);
-    C6000.writeCfgRegister(0x41, 0x00);
-    C6000.writeCfgRegister(0x41, 0x40);
-    C6000.writeCfgRegister(0x40, 0x43);
+    if ((txTimeslot != 0) && !txIsWake) {
+        /*
+         * Through a repeater: back to receive without stopping the time
+         * axis (0x40 stays 0xC3, as OpenGD77 ends a repeater transmission),
+         * so that the local TC bit, which kept toggling while transmitting,
+         * still matches the repeater.  It is normally still on the air
+         * (hang time, and it repeats the end of this call), so a quick
+         * follow-up call needs no wake-up.  If it has gone quiet, the read
+         * bit stops alternating and the lock is lost at the first slot.
+         */
+        C6000.writeCfgRegister(0x56, 0x00);
+        C6000.writeCfgRegister(0x41, 0x50);
+    } else {
+        // Transmission off (manual: reg 0x40 = 0x03), then passive
+        // reception with the steps dmrMode() starts it with; the receive
+        // timing starts over, and with it the repeater lock
+        C6000.writeCfgRegister(0x41, 0x00);
+        C6000.writeCfgRegister(0x40, 0x03);
+        C6000.writeCfgRegister(0x56, 0x00);
+        C6000.writeCfgRegister(0x10, slotModeReg);
+        C6000.writeCfgRegister(0x41, 0x20);
+        C6000.writeCfgRegister(0x41, 0x00);
+        C6000.writeCfgRegister(0x41, 0x40);
+        C6000.writeCfgRegister(0x40, 0x43);
+        tcReset(&tc);
+    }
     haveLast = false;
     lcHave = false;
-
-    // The receive timing starts over: the repeater lock is found again
-    tcReset(&tc);
 
     if (txIsWake) {
         LOG_I("dmr", "wake-up %s", clean ? "sent" : "not sent (aborted)");
@@ -1206,8 +1219,9 @@ void dmr_endTx(uint32_t elapsedMs)
     LOG_I("dmr", "tx: %lu ms, %lu slot interrupts, %lu TX interrupts",
           (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
           (unsigned long)txTxIrqs);
-    LOG_I("dmr", "tx: reg 0x10 back to %02x", slotModeReg);
-    if (txTimeslot != 0) {
+    if (txTimeslot == 0)
+        LOG_I("dmr", "tx: reg 0x10 back to %02x", slotModeReg);
+    else {
         LOG_I("dmr", "tx: header after %lu slot interrupts; tc bits %08lx",
               (unsigned long)txAlignIrqs, (unsigned long)txTcHist);
     }
