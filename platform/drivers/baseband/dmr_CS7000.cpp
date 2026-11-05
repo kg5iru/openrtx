@@ -156,6 +156,15 @@ static bool termSeen = false; // terminator read since the last voice burst
  * only answers a wake-up, so after a terminator the PTT wakes it up again.
  */
 static volatile bool bsTail = false;
+/*
+ * Slots during which a terminator does not set bsTail: the wait after a
+ * wake-up.  v52 on air: right after a wake-up the hotspot was often still
+ * repeating the end of the own previous call, whose terminators then blocked
+ * the lock and cost one or two more wake-ups (1.2 to 1.9 s instead of
+ * 0.5 s).  The repeater has just been woken up, so its end of call does not
+ * matter.  900 ms covers the 600 ms wait.
+ */
+static volatile uint8_t bsTailHold = 0;
 static uint8_t lastVoice[27];
 static bool haveLast = false;
 static bool voicePathOn = false;
@@ -612,6 +621,8 @@ static void trackTc()
 {
     if (slotsSinceSys < 255)
         slotsSinceSys++;
+    if (bsTailHold > 0)
+        bsTailHold--;
     (void)C6000.readCfgRegister(0x50);
     (void)C6000.readCfgRegister(0x51);
     tcUpdate(&tc, (C6000.readCfgRegister(0x52) >> 2) & 1);
@@ -897,7 +908,7 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         callActive = true;
         slotsSinceVoice = 0;
         bsTail = false;
-    } else if (term) {
+    } else if (term && (bsTailHold == 0)) {
         bsTail = true;
     }
     if (term && callActive) {
@@ -1178,6 +1189,7 @@ void dmr_startWakeup(uint32_t src)
     txIsWake = true;
     txWakeLeft = 2;
     bsTail = false;
+    bsTailHold = 30;
     C6000.writeCfgRegister(0x40, 0xE3);
     txState = TX_WAKE;
 }
