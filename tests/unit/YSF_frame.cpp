@@ -473,6 +473,7 @@ TEST_CASE("YSF V/D mode 1 voice is copied as is", "[ysf]")
  * (bit for bit on the parts it writes) and against the decoder.
  */
 #include "protocols/YSF/FrameEncoder.hpp"
+#include "protocols/YSF/VoiceFR.hpp"
 
 TEST_CASE("YSF FICH encoder matches the reference and decodes", "[ysf]")
 {
@@ -576,6 +577,46 @@ TEST_CASE("YSF V/D mode 2 voice encoder matches the reference and decodes",
             uint8_t back[9];
             REQUIRE(vd2VoiceToDmr(got, n, back) == 0);
             REQUIRE(memcmp(back, ambe[n], 9) == 0);
+        }
+    }
+}
+
+TEST_CASE("YSF voice full rate (VW) frames carry IMBE both ways", "[ysf]")
+{
+    std::mt19937 rng(77);
+
+    for (int t = 0; t < 300; t++) {
+        uint8_t imbe[5][IMBE_BYTES];
+        frame_t frame{};
+        for (size_t n = 0; n < 5; n++) {
+            for (auto &b : imbe[n])
+                b = rng() & 0xFF;
+            encodeVwVoice(imbe[n], n, frame);
+        }
+
+        // A frame of five voice frames
+        Fich f5 = makeFich(FI_COMMUNICATIONS, 3, 6, DT_VOICE_FR, 0);
+        REQUIRE(vwVoiceFrames(f5) == 5);
+
+        // Channel errors: one per Golay word of the first channel frame
+        frame[PAYLOAD_OFFSET + 0] ^= 0x80;
+        frame[PAYLOAD_OFFSET + 9] ^= 0x01;
+
+        for (size_t k = 0; k < 5; k++) {
+            uint8_t out[IMBE_BYTES];
+            unsigned int errs = vwVoiceToImbe(frame, f5, k, out);
+            REQUIRE(memcmp(out, imbe[k], IMBE_BYTES) == 0);
+            if (k > 0)
+                REQUIRE(errs == 0);
+        }
+
+        // The first frame after the header: voice in the last two blocks
+        Fich f2 = makeFich(FI_COMMUNICATIONS, 0, 1, DT_VOICE_FR, 0);
+        REQUIRE(vwVoiceFrames(f2) == 2);
+        for (size_t k = 0; k < 2; k++) {
+            uint8_t out[IMBE_BYTES];
+            vwVoiceToImbe(frame, f2, k, out);
+            REQUIRE(memcmp(out, imbe[3 + k], IMBE_BYTES) == 0);
         }
     }
 }
