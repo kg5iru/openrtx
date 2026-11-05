@@ -33,6 +33,17 @@ public:
 
     void decode(const unsigned char *data, unsigned char *imbe, unsigned int n);
 
+    /*
+     * One IMBE channel frame (144 bits in 18 bytes: Golay and Hamming coded,
+     * whitened, interleaved), as both P25 LDUs and YSF voice full rate (VW)
+     * frames carry it, to and from the 88 IMBE bits (11 bytes).  Decoding
+     * takes the bits as they are: correct them with
+     * CAMBEFEC::regenerateIMBE() first.
+     */
+    static void decodeFrame(const unsigned char *frame, unsigned char *imbe);
+
+    static void encodeFrame(const unsigned char *imbe, unsigned char *frame);
+
 private:
     CAMBEFEC m_fec;
 };

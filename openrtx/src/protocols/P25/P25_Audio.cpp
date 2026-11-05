@@ -140,12 +140,20 @@ void CP25Audio::decode(const unsigned char *data, unsigned char *imbe,
             return;
     }
 
+    decodeFrame(temp, imbe);
+}
+
+void CP25Audio::decodeFrame(const unsigned char *frame, unsigned char *imbe)
+{
+    assert(frame != NULL);
+    assert(imbe != NULL);
+
     bool bit[144U];
 
     // De-interleave
     for (unsigned int i = 0U; i < 144U; i++) {
         unsigned int n = IMBE_INTERLEAVE[i];
-        bit[i] = READ_BIT(temp, n);
+        bit[i] = READ_BIT(frame, n);
     }
 
     // now ..
@@ -215,6 +223,47 @@ void CP25Audio::encode(unsigned char *data, const unsigned char *imbe,
 {
     assert(data != NULL);
     assert(imbe != NULL);
+
+    unsigned char temp[18U];
+    encodeFrame(imbe, temp);
+
+    switch (n) {
+        case 0U:
+            CP25Utils::encode(temp, data, 114U, 262U);
+            break;
+        case 1U:
+            CP25Utils::encode(temp, data, 262U, 410U);
+            break;
+        case 2U:
+            CP25Utils::encode(temp, data, 452U, 600U);
+            break;
+        case 3U:
+            CP25Utils::encode(temp, data, 640U, 788U);
+            break;
+        case 4U:
+            CP25Utils::encode(temp, data, 830U, 978U);
+            break;
+        case 5U:
+            CP25Utils::encode(temp, data, 1020U, 1168U);
+            break;
+        case 6U:
+            CP25Utils::encode(temp, data, 1208U, 1356U);
+            break;
+        case 7U:
+            CP25Utils::encode(temp, data, 1398U, 1546U);
+            break;
+        case 8U:
+            CP25Utils::encode(temp, data, 1578U, 1726U);
+            break;
+        default:
+            return;
+    }
+}
+
+void CP25Audio::encodeFrame(const unsigned char *imbe, unsigned char *frame)
+{
+    assert(imbe != NULL);
+    assert(frame != NULL);
 
     bool bTemp[144U];
     bool *bit = bTemp;
@@ -306,43 +355,9 @@ void CP25Audio::encode(unsigned char *data, const unsigned char *imbe,
     for (unsigned int i = 0U; i < 114U; i++)
         bTemp[i + 23U] ^= prn[i];
 
-    unsigned char temp[18U];
-
     // Interleave
     for (unsigned int i = 0U; i < 144U; i++) {
         unsigned int n = IMBE_INTERLEAVE[i];
-        WRITE_BIT(temp, n, bTemp[i]);
-    }
-
-    switch (n) {
-        case 0U:
-            CP25Utils::encode(temp, data, 114U, 262U);
-            break;
-        case 1U:
-            CP25Utils::encode(temp, data, 262U, 410U);
-            break;
-        case 2U:
-            CP25Utils::encode(temp, data, 452U, 600U);
-            break;
-        case 3U:
-            CP25Utils::encode(temp, data, 640U, 788U);
-            break;
-        case 4U:
-            CP25Utils::encode(temp, data, 830U, 978U);
-            break;
-        case 5U:
-            CP25Utils::encode(temp, data, 1020U, 1168U);
-            break;
-        case 6U:
-            CP25Utils::encode(temp, data, 1208U, 1356U);
-            break;
-        case 7U:
-            CP25Utils::encode(temp, data, 1398U, 1546U);
-            break;
-        case 8U:
-            CP25Utils::encode(temp, data, 1578U, 1726U);
-            break;
-        default:
-            return;
+        WRITE_BIT(frame, n, bTemp[i]);
     }
 }
