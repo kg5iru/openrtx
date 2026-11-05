@@ -33,8 +33,6 @@ OpMode_DMR::OpMode_DMR()
     , txTicks(0)
     , txStart(0)
     , stopTick(0)
-    , lastRxIrqs(0)
-    , quietTicks(0)
 {
 }
 
@@ -112,14 +110,6 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
      * PTT starts one transmission; releasing it, or the time-out, sends the
      * terminator, and once it is out the radio goes back to receive.
      */
-    // Is the chip's slot timing running? (see restartReceiver)
-    uint32_t irqs = dmr_rxSlotIrqs();
-    if (irqs != lastRxIrqs)
-        quietTicks = 0;
-    else if (quietTicks < 255)
-        quietTicks++;
-    lastRxIrqs = irqs;
-
     bool ptt = platform_getPttStatus();
     if (!ptt)
         pttHeld = false;
@@ -131,23 +121,6 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         else if (status->dmrRadioId == 0)
             LOG_W("dmr", "PTT: no radio ID set (Settings > DMR)");
         else {
-            /*
-             * The transmitter needs the chip's slot interrupt, which only
-             * runs while the receiver is searching or locked.  On air
-             * (v40..v43), every press made while it had stopped sent
-             * nothing.  Restart it first and give it 300 ms.
-             */
-            if (quietTicks >= 5) {
-                restartReceiver();
-                uint32_t before = dmr_rxSlotIrqs();
-                for (int i = 0; (i < 10) && (dmr_rxSlotIrqs() == before); i++)
-                    sleepFor(0u, 30u);
-                LOG_I("dmr",
-                      "PTT: slot interrupt was stopped, receiver "
-                      "restarted: %s",
-                      (dmr_rxSlotIrqs() != before) ? "running again" :
-                                                     "still stopped");
-            }
             startTx(status);
         }
     }
@@ -223,26 +196,13 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
     platform_ledOn(RED);
 }
 
-/*
- * Full DMR set-up of the chip (reset, dmrMode(), then colour code and
- * timeslot), as at mode entry.  After a transmission the slot interrupt did
- * not come back (v43 log: none until a call was received), and a
- * transmission needs it.
- */
-void OpMode_DMR::restartReceiver()
-{
-    radio_disableRtx();
-    radio_setOpmode(OPMODE_DMR);
-    radio_updateConfiguration();
-    radio_enableRx();
-}
-
 void OpMode_DMR::finishTx(rtxStatus_t *const status)
 {
     dmrDiag_set(DIAG_STAGE, STAGE_FINISHING);
     dmrAudio_stopTx();
     dmr_endTx((uint32_t)(getTick() - txStart));
-    restartReceiver();
+    radio_disableRtx();
+    radio_enableRx();
     dmrDiag_txEnd();
 
     status->opStatus = RX;

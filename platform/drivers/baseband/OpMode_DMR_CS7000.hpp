@@ -36,10 +36,6 @@ private:
     void stopRxAudio();
     void startTx(rtxStatus_t *const status);
     void finishTx(rtxStatus_t *const status);
-    void restartReceiver();
-
-    uint32_t lastRxIrqs; ///< dmr_rxSlotIrqs() at the previous update
-    uint8_t quietTicks;  ///< Updates without a slot interrupt
 
     bool enterRx;
     bool audioOn;

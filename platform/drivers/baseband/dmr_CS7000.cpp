@@ -64,19 +64,6 @@ static void vspiReadVoice(uint8_t out[27])
         out[i] = rx[2 + i];
 }
 
-// The stock encoder glue writes the 27 bytes of a burst with the command
-// bytes 0x03, 0x00 (fn 0x08085C02, called at 0x080861D0).
-static void vspiWriteVoice(const uint8_t in[27])
-{
-    uint8_t tx[29] = { 0x03, 0x00 };
-    uint8_t rx[29];
-    for (int i = 0; i < 27; i++)
-        tx[2 + i] = in[i];
-    gpio_clearPin(V_SPI_CS);
-    spi_transfer(&v_spi, tx, rx, sizeof(tx));
-    gpio_setPin(V_SPI_CS);
-}
-
 /*
  * AMBE+2 frame check.  A DMR voice frame (72 bits, on-air order) protects its
  * most significant bits with a Golay(24,12) word A and a Golay(23,12) word B,
@@ -415,11 +402,10 @@ static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
 static volatile uint8_t txState = TX_OFF;
 static volatile bool txStopReq = false;
 static uint8_t txLc[9];
-static bool txArmSlot = false;    // this slot interrupt arms a burst
-static bool txFirst = false;      // reg 0x40 not yet switched to transmit
-static bool txVoiceReady = false; // voice for the next burst written already
-static uint32_t txLoadsTxIrq = 0; // voice writes made at RF_TX_INTER
-static uint32_t txLoadsSlot = 0;  // made in the arming slot (no RF_TX_INTER)
+static bool txArmSlot = false; // this slot interrupt arms a burst
+// Registers changed for the transmission, restored afterwards
+static uint8_t txSaved10 = 0;
+static uint8_t txSaved56 = 0;
 // Slot interrupts while receiving, since the last TX start: tells whether
 // the chip's slot timer was running when the PTT was pressed
 static volatile uint32_t rxSlotIrqs = 0;
@@ -462,25 +448,21 @@ static void loadVoice()
             txFirstBursts[txBursts][i] = voice[i];
     }
 
-    vspiWriteVoice(voice);
+    /*
+     * The burst's voice goes to TX RAM 0x30..0x4A, the place the HR_C6000
+     * manual gives for voice frames A..F (table 5.2), written in the same
+     * slot as 0x41 = 0x80 and reg 0x50 (the "t2" preparation time).  The
+     * stock firmware does this on its privacy path, with reg 0x56 bit 4 set
+     * (state 4, 0x08077824..0x08077850).  Over V_SPI (v40..v44) the chip
+     * took only some of the writes, and sent each block it took for 1 to
+     * 200 bursts in a row (off-air captures).
+     */
+    C6000.writeTxBurst(0x30, voice, sizeof(voice));
 }
 
 static void handleTxSlot()
 {
     txArmSlot = !txArmSlot;
-
-    /*
-     * The stock code writes reg 0x40 = 0xC3 on its first pass through the
-     * TX state, inside the slot task, right before the first 0x41 = 0x80.
-     * v41 wrote it (and 0x21 = 0x02) from the RTX thread at PTT time: when
-     * the receiver had not locked on a signal shortly before, the slot
-     * interrupt then stopped altogether and nothing was sent (6 of 10
-     * presses; the 4 that worked each followed a received call).
-     */
-    if (txFirst) {
-        C6000.writeCfgRegister(0x40, 0xC3);
-        txFirst = false;
-    }
 
     if (!txArmSlot) {
         if (txState == TX_END) {
@@ -516,14 +498,9 @@ static void handleTxSlot()
                 break;
             }
 
-            if (!txVoiceReady) {
-                loadVoice();
-                txLoadsSlot++;
-            }
-            txVoiceReady = false;
-
             dmrDiag_set(DIAG_STAGE, STAGE_VOICE);
             C6000.writeCfgRegister(0x41, 0x80);
+            loadVoice();
             C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
             C6000.writeCfgRegister(0x50, (uint8_t)((txVoiceN << 4) | 0x08));
             txVoiceN = (txVoiceN + 1) % 6;
@@ -769,20 +746,6 @@ void EXTI2_IRQHandler()
     if (txState != TX_OFF) {
         txTxIrqs++;
         dmrDiag_inc(DIAG_TX_IRQ);
-
-        /*
-         * Voice for the next burst.  Off-air captures: written in the arming
-         * slot right after 0x41 = 0x80 (v42), the chip sent the same 27
-         * bytes for 1 to 20 bursts (mean about 5); written in the slot
-         * before (v43), for 7 to 32: when the write is made matters, and
-         * most writes are not taken.  RF_TX_INTER comes once per burst sent;
-         * v44 tries writing in answer to it.
-         */
-        if ((txState == TX_VOICE) && !txStopReq && !txVoiceReady) {
-            loadVoice();
-            txVoiceReady = true;
-            txLoadsTxIrq++;
-        }
     }
 }
 
@@ -869,20 +832,22 @@ void dmr_startTx(uint32_t src, uint32_t dst)
     txSlotIrqs = 0;
     txTxIrqs = 0;
 
-    txFirst = true;
-    txVoiceReady = false;
-    txLoadsTxIrq = 0;
-    txLoadsSlot = 0;
-
     /*
-     * Reg 0x11 bit 0.  The stock DMR channel load ends with 0x11 = 0x81
-     * (0x0804B72E), and the stock code switches between 0x80 and 0x81 as
-     * the receiver locks.  OpenRTX kept 0x80, and v40..v42 on air only
-     * transmitted when the receiver had locked on a call shortly before:
-     * otherwise the slot interrupt never came.  Bit 0 is taken to let the
-     * chip run its slot timing on its own.
+     * HR_C6000 manual, 5.4.4/5.4.5 ("active sending", "voice
+     * transmission"): on the send request reg 0x40 = 0xA3, active mode
+     * (bit 5), in which the chip builds its own 30 ms time axis and starts
+     * the slot interrupt.  0xC3 (v40..v44) is passive mode: the time axis
+     * comes from a received signal, so the radio could only transmit right
+     * after receiving a call.  The manual's example runs in layer 2
+     * non-relay mode (reg 0x10 = 0x6A): the timeslot setting's 0x6C / 0x6D
+     * is put back afterwards.  Reg 0x56 bit 4: voice from TX RAM 0x30 (see
+     * loadVoice).
      */
-    C6000.writeCfgRegister(0x11, 0x81);
+    txSaved10 = C6000.readCfgRegister(0x10);
+    txSaved56 = C6000.readCfgRegister(0x56);
+    C6000.writeCfgRegister(0x10, 0x6A);
+    C6000.writeCfgRegister(0x56, txSaved56 | 0x10);
+    C6000.writeCfgRegister(0x40, 0xA3);
 
     LOG_I("dmr",
           "tx start: src %lu dst %lu, %lu slot interrupts since the "
@@ -912,12 +877,10 @@ void dmr_kickTx()
     // that a slot interrupt cannot split the sequence
     NVIC_DisableIRQ(EXTI0_IRQn);
     NVIC_DisableIRQ(EXTI3_IRQn);
-    C6000.writeCfgRegister(0x40, 0xC3);
     C6000.writeCfgRegister(0x41, 0x80);
     C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
     C6000.writeCfgRegister(0x50, 0x10);
     C6000.writeCfgRegister(0x22, 0x86);
-    txFirst = false;
     txArmSlot = true; // the next slot interrupt is the idle one
     txHeaders--;
     NVIC_EnableIRQ(EXTI3_IRQn);
@@ -945,10 +908,12 @@ void dmr_endTx(uint32_t elapsedMs)
     bool clean = (txState == TX_DONE);
     txState = TX_OFF;
 
-    // Receive again, with the steps dmrMode() starts reception with
-    C6000.writeCfgRegister(0x11, 0x80);
+    // Transmission off (manual: reg 0x40 = 0x03), then passive reception
+    // with the steps dmrMode() starts it with
     C6000.writeCfgRegister(0x41, 0x00);
     C6000.writeCfgRegister(0x40, 0x03);
+    C6000.writeCfgRegister(0x56, txSaved56);
+    C6000.writeCfgRegister(0x10, txSaved10);
     C6000.writeCfgRegister(0x41, 0x20);
     C6000.writeCfgRegister(0x41, 0x00);
     C6000.writeCfgRegister(0x41, 0x40);
@@ -962,8 +927,8 @@ void dmr_endTx(uint32_t elapsedMs)
     LOG_I("dmr", "tx: %lu ms, %lu slot interrupts, %lu TX interrupts",
           (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
           (unsigned long)txTxIrqs);
-    LOG_I("dmr", "tx: voice written %lu times at RF_TX_INTER, %lu in the slot",
-          (unsigned long)txLoadsTxIrq, (unsigned long)txLoadsSlot);
+    LOG_I("dmr", "tx: regs 0x10 %02x, 0x56 %02x restored", txSaved10,
+          txSaved56);
     if (txBursts >= 1)
         LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 0", txFirstBursts[0], 27);
     if (txBursts >= 2)
