@@ -74,7 +74,7 @@ void Demodulator::reset()
     frames[0].fill(0);
     frames[1].fill(0);
 
-    dsp_resetState(dcBlock);
+    dcLevel = 0.0f;
     rrc.reset();
     correlator.reset();
     sync.reset();
@@ -96,8 +96,17 @@ bool Demodulator::isLocked() const
 
 bool Demodulator::sample(const int16_t rawSample)
 {
-    int16_t dc = dsp_dcBlockFilter(&dcBlock, rawSample);
-    float in = static_cast<float>(dc);
+    /*
+     * Slow DC removal (time constant 85 ms, about 2 Hz).  The DC block the
+     * M17 demodulator uses (pole 0.995, 19 Hz) made the baseline wander with
+     * the data by a good part of the distance between symbol levels: with it
+     * the bit error rate in noise was 3 to 10 times higher.  What this one
+     * leaves (a frequency offset not yet tracked) is measured on each sync
+     * word, and the symbol thresholds are set around it (see quantize).
+     */
+    float raw = static_cast<float>(rawSample);
+    dcLevel += (raw - dcLevel) * DC_GAIN;
+    float in = raw - dcLevel;
     if (inverted)
         in = -in;
     int16_t smp = static_cast<int16_t>(rrc(in));
@@ -258,11 +267,16 @@ int8_t Demodulator::quantize(const int16_t sample)
     auto outer = devEstimator.outerDeviation();
     int8_t symbol;
 
-    if (sample > (2 * outer.first) / 3)
+    // Thresholds around the middle of the outer levels, which follows a DC
+    // offset the DC removal has not yet taken out
+    int32_t mid = (outer.first + outer.second) / 2;
+    int32_t step = (2 * (outer.first - outer.second)) / 6;
+
+    if (sample > (mid + step))
         symbol = +3;
-    else if (sample < (2 * outer.second) / 3)
+    else if (sample < (mid - step))
         symbol = -3;
-    else if (sample > devEstimator.zeroOffset())
+    else if (sample > mid)
         symbol = +1;
     else
         symbol = -1;
@@ -419,7 +433,8 @@ void Demodulator::trackTiming(const int16_t value, const int8_t symbol)
 
     // Value in symbol units (+-1, +-3); the error is about -2 per sample of
     // lateness, averaged over random data.
-    float y = 3.0f * static_cast<float>(value) / scale;
+    float mid = 0.5f * static_cast<float>(outer.first + outer.second);
+    float y = 3.0f * (static_cast<float>(value) - mid) / scale;
     float e = (static_cast<float>(prevSymbol) * y)
             - (static_cast<float>(symbol) * prevValue);
     prevValue = y;
