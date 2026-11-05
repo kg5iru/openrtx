@@ -142,6 +142,18 @@ void Modulator::stop()
             queueSymbol((pendingSymbols & 1) ? -3 : +3);
     }
 
+#ifndef PLATFORM_LINUX
+    /*
+     * sendChunk() fills the idle half of the buffer after waiting for the
+     * other one: the chunk it filled last goes out only at the next sync,
+     * which also converts it for the DAC.  Without it the stream stopped at
+     * the end of the half playing, dropping the last chunk: on air the
+     * terminator (TDU) ended a few symbols after its sync word.
+     */
+    if (audioPath_getStatus(outPath) == PATH_OPEN)
+        outputStream_sync(outStream, true);
+#endif
+
     audioStream_stop(outStream);
     txRunning = false;
     idleBuffer = baseband_buffer.get();
