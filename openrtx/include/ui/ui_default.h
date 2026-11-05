@@ -195,7 +195,10 @@ enum settingsYSFItems
     YSF_DESTINATION = 0,
     YSF_TX_DGID,
     YSF_RX_DGID,
-    YSF_MIC_GAIN
+    YSF_MIC_GAIN,
+#ifdef CONFIG_P25
+    YSF_TX_MODE         // DN or VW (IMBE, through the P25 vocoder)
+#endif
 };
 #endif
 

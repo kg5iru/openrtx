@@ -213,14 +213,17 @@ void _ui_drawModeInfo(ui_state_t *ui_state)
                 gfx_print(layout.line1_pos, layout.line2_font, TEXT_ALIGN_CENTER,
                           color_white, "%s", (call.src[0] != '\0') ? call.src
                                                                    : "...");
+                #ifndef CONFIG_P25
                 if(call.dt == 3)
                     gfx_print(layout.line2_pos, layout.line2_font,
                               TEXT_ALIGN_CENTER, color_white, "VW: no audio");
                 else
+                #endif
                     gfx_print(layout.line2_pos, layout.line2_font,
-                              TEXT_ALIGN_CENTER, color_white, "%s DG%u",
+                              TEXT_ALIGN_CENTER, color_white, "%s DG%u%s",
                               (call.dst[0] != '\0') ? call.dst : "-",
-                              (unsigned) call.dgid);
+                              (unsigned) call.dgid,
+                              (call.dt == 3) ? " VW" : "");
             }
             else
             {
@@ -232,8 +235,13 @@ void _ui_drawModeInfo(ui_state_t *ui_state)
                     gfx_print(layout.line1_pos, layout.line2_font,
                               TEXT_ALIGN_CENTER, color_white, "RX DG%u",
                               rxDgid);
+                const char *txMode = "YSF";
+                #ifdef CONFIG_P25
+                if(s->ysf_txVw == 1)
+                    txMode = "YSF VW";
+                #endif
                 gfx_print(layout.line2_pos, layout.line2_font, TEXT_ALIGN_CENTER,
-                          color_white, "YSF %.10s DG%u",
+                          color_white, "%s %.10s DG%u", txMode,
                           (s->ysf_dest[0] != '\0') ? s->ysf_dest : "ALL",
                           settings_ysfDgid(s->ysf_txDgid));
             }

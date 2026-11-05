@@ -619,6 +619,12 @@ int _ui_getYSFValueName(char *buf, uint8_t max_len, uint8_t index)
             sniprintf(buf, max_len, "%+d dB", db);
             break;
         }
+
+#ifdef CONFIG_P25
+        case YSF_TX_MODE:
+            sniprintf(buf, max_len, "%s", (s->ysf_txVw == 1) ? "VW" : "DN");
+            break;
+#endif
     }
 
     return 0;

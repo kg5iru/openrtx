@@ -194,7 +194,10 @@ const char *settings_ysf_items[] =
     "Destination",
     "TX DG-ID",
     "RX DG-ID",
-    "Mic Gain"
+    "Mic Gain",
+#ifdef CONFIG_P25
+    "TX Mode"
+#endif
 };
 #endif
 
@@ -1176,6 +1179,12 @@ static bool _ui_stepYSFSetting(uint8_t item, bool up)
 
         case YSF_MIC_GAIN:
             return _ui_stepDMRSetting(DMR_MIC_GAIN, up);
+
+#ifdef CONFIG_P25
+        case YSF_TX_MODE:
+            s->ysf_txVw = (s->ysf_txVw == 1) ? 0 : 1;
+            return true;
+#endif
 
         default:
             return false;
@@ -2819,8 +2828,9 @@ void ui_updateFSM(bool *sync_rtx)
                                                 true);
                         }
                     }
-                    else if(sel == YSF_MIC_GAIN)
+                    else if(!(sel == YSF_TX_DGID || sel == YSF_RX_DGID))
                     {
+                        // Mic gain, TX mode: chosen from a list
                         if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
                            msg.keys & KEY_LEFT)
                             _ui_stepYSFSetting(sel, false);
