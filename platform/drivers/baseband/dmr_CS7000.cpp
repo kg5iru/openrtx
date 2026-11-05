@@ -528,29 +528,28 @@ static uint8_t txFirstBursts[2][27];
  * and followed with a local copy that toggles each slot: when the two agree
  * on several slots in a row, the receiver is locked to the repeater, and the
  * first burst of a transmission is armed at the slot interrupt where the
- * local bit equals the own timeslot (TC 0 = TS1).  Once the RF chain is keyed
- * the local bit just keeps toggling.
+ * local bit equals the own timeslot (TC 0 = TS1; right on air, v49).  Once
+ * the RF chain is keyed the local bit just keeps toggling.
  *
- * The bit is read twice per slot interrupt: on its own (as OpenGD77 does)
- * and after 0x50 and 0x51 (the order in which the voice burst reads saw it
- * follow the timeslot, v37), each followed separately; either may lock.
+ * The bit is only valid when read after 0x50 and 0x51, as the voice burst
+ * reads do (v37).  Read on its own at the slot interrupt, as OpenGD77 reads
+ * it, it stayed 0 on this radio (v49 on air).
  */
 struct TcTrack {
-    uint8_t local;       ///< Expected TC bit at this slot interrupt
-    uint8_t lock;        ///< Agreements in a row, up to 8
-    uint8_t disagree;    ///< Recent disagreements; 4 re-sync to the read bit
-    uint32_t hist;       ///< Read bits, newest in bit 0
+    uint8_t local;    ///< Expected TC bit at this slot interrupt
+    uint8_t lock;     ///< Agreements in a row, up to 8
+    uint8_t disagree; ///< Recent disagreements; 4 re-sync to the read bit
+    uint32_t hist;    ///< Read bits, newest in bit 0
 };
-static TcTrack tcA, tcB; // A: 0x52 alone; B: after 0x50 and 0x51
+static TcTrack tc;
 static constexpr uint8_t TC_LOCKED = 5;
 static volatile uint8_t txTimeslot = 0; // 0 = direct mode
 static uint8_t txTcIdx = 0;             // TC bit of the own slot
-static TcTrack *txTc = nullptr;         // the tracker the transmission uses
+static bool txTcOn = false;             // the local TC bit runs
 static uint32_t txAlignIrqs = 0;        // slot interrupts before the header
-static uint32_t txTcHistA = 0, txTcHistB = 0;
-static uint8_t txLockA = 0, txLockB = 0;
+static uint32_t txTcHist = 0;           // TC bits read before the transmission
 static uint8_t txCsbk[12];
-static bool txIsWake = false; // the transmission is a wake-up
+static bool txIsWake = false;           // the transmission is a wake-up
 
 static void tcUpdate(TcTrack *t, uint8_t bit)
 {
@@ -588,12 +587,9 @@ static inline bool tcLocked(const TcTrack *t)
 // Slot interrupt while receiving with a timeslot set
 static void trackTc()
 {
-    uint8_t a = (C6000.readCfgRegister(0x52) >> 2) & 1;
     (void)C6000.readCfgRegister(0x50);
     (void)C6000.readCfgRegister(0x51);
-    uint8_t b = (C6000.readCfgRegister(0x52) >> 2) & 1;
-    tcUpdate(&tcA, a);
-    tcUpdate(&tcB, b);
+    tcUpdate(&tc, (C6000.readCfgRegister(0x52) >> 2) & 1);
 }
 
 static void txSendTerminator()
@@ -694,8 +690,8 @@ static void handleSlot()
         txSlotIrqs++;
         dmrDiag_inc(DIAG_SLOT_IRQ);
         dmrDiag_set(DIAG_IN_IRQ, 1);
-        if (txTc != nullptr)
-            txTc->local ^= 1;
+        if (txTcOn)
+            tc.local ^= 1;
         switch (txState) {
             case TX_DONE:
                 break;
@@ -715,7 +711,7 @@ static void handleSlot()
                 if (txStopReq) {
                     C6000.writeCfgRegister(0x41, 0x00);
                     txState = TX_DONE;
-                } else if (txTc->local == txTcIdx) {
+                } else if (tc.local == txTcIdx) {
                     txState = TX_HEADER;
                     txArmSlot = false; // handleTxSlot() arms in this slot
                     handleTxSlot();
@@ -1027,7 +1023,7 @@ static void txReset()
     txSlotIrqs = 0;
     txTxIrqs = 0;
     txAlignIrqs = 0;
-    txTc = nullptr;
+    txTcOn = false;
     txIsWake = false;
 }
 
@@ -1060,18 +1056,12 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
          * running on the last received timing once the RF chain is keyed.
          */
         txTcIdx = txTimeslot - 1;
-        txTc = tcLocked(&tcA) ? &tcA : &tcB;
-        txTcHistA = tcA.hist;
-        txTcHistB = tcB.hist;
-        txLockA = tcA.lock;
-        txLockB = tcB.lock;
+        txTcHist = tc.hist;
+        txTcOn = true;
         C6000.writeCfgRegister(0x56, 0x10);
         C6000.writeCfgRegister(0x40, 0xC3);
-        LOG_I("dmr",
-              "tx start: src %lu dst %lu, through the repeater on TS%u "
-              "(tc %c)",
-              (unsigned long)src, (unsigned long)dst, txTimeslot,
-              (txTc == &tcA) ? 'A' : 'B');
+        LOG_I("dmr", "tx start: src %lu dst %lu, through the repeater on TS%u",
+              (unsigned long)src, (unsigned long)dst, txTimeslot);
         rxSlotIrqs = 0;
         dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
         txState = TX_ALIGN; // last: the slot interrupt starts from here
@@ -1104,7 +1094,7 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
 
 bool dmr_bsLocked()
 {
-    return (rxTimeslot != 0) && (tcLocked(&tcA) || tcLocked(&tcB));
+    return (rxTimeslot != 0) && tcLocked(&tc);
 }
 
 void dmr_startWakeup(uint32_t src)
@@ -1133,8 +1123,7 @@ void dmr_startWakeup(uint32_t src)
 
     txReset();
     txTimeslot = 0;
-    tcReset(&tcA);
-    tcReset(&tcB);
+    tcReset(&tc);
     txIsWake = true;
     C6000.writeCfgRegister(0x40, 0xE3);
     txState = TX_WAKE;
@@ -1204,8 +1193,7 @@ void dmr_endTx(uint32_t elapsedMs)
     lcHave = false;
 
     // The receive timing starts over: the repeater lock is found again
-    tcReset(&tcA);
-    tcReset(&tcB);
+    tcReset(&tc);
 
     if (txIsWake) {
         LOG_I("dmr", "wake-up %s", clean ? "sent" : "not sent (aborted)");
@@ -1220,11 +1208,8 @@ void dmr_endTx(uint32_t elapsedMs)
           (unsigned long)txTxIrqs);
     LOG_I("dmr", "tx: reg 0x10 back to %02x", slotModeReg);
     if (txTimeslot != 0) {
-        LOG_I("dmr",
-              "tx: header after %lu slot interrupts; tc A %08lx lock %u, "
-              "B %08lx lock %u",
-              (unsigned long)txAlignIrqs, (unsigned long)txTcHistA, txLockA,
-              (unsigned long)txTcHistB, txLockB);
+        LOG_I("dmr", "tx: header after %lu slot interrupts; tc bits %08lx",
+              (unsigned long)txAlignIrqs, (unsigned long)txTcHist);
     }
     if (txBursts >= 1)
         LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 0", txFirstBursts[0], 27);
