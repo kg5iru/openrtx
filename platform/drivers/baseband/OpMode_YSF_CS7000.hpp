@@ -60,6 +60,7 @@ private:
     uint8_t unlockedTicks;    ///< Updates without a lock during a call
     uint8_t lastDt;           ///< Data type of the last valid FICH
     uint8_t flywheel;         ///< Frames in a row decoded on lastDt
+    uint8_t rxDgid;           ///< DG-ID received, 0 = all
 
     std::unique_ptr<int16_t[]> basebandBuf;
     std::unique_ptr<YSF::Demodulator> demod;
@@ -73,6 +74,9 @@ private:
     uint32_t txSilence; ///< Voice frames sent as silence (none encoded)
     long long txStart;  ///< getTick() at the start of the transmission
     uint8_t txSrc[10];  ///< Own callsign, padded with spaces
+    uint8_t txDst[10];  ///< Destination callsign, or ten asterisks for all
+    uint8_t txCm;       ///< Call mode: group (to all) or individual
+    uint8_t txDgid;     ///< DG-ID sent
     std::unique_ptr<YSF::Modulator> modulator;
 };
 
