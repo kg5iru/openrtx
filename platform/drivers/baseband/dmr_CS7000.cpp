@@ -34,6 +34,7 @@
 #include "drivers/baseband/dmr_CS7000.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "drivers/baseband/dmr_diag_CS7000.h"
+#include "core/crc.h"
 #include "core/log.h"
 #include "peripherals/spi.h"
 #include "drivers/SPI/spi_stm32.h"
@@ -1250,14 +1251,8 @@ static void txReset()
 // CRC-CCITT of DMR (ETSI TS 102 361-1 B.3.7): initial 0, inverted, masked
 static void setCrc16(uint8_t b[12], uint16_t mask)
 {
-    uint16_t c = 0;
-    for (int i = 0; i < 10; i++) {
-        c ^= (uint16_t)(b[i] << 8);
-        for (int k = 0; k < 8; k++)
-            c = (c & 0x8000) ? (uint16_t)((c << 1) ^ 0x1021) :
-                               (uint16_t)(c << 1);
-    }
-    c = (uint16_t)(c ^ 0xFFFF ^ mask);
+    // CRC-CCITT (polynomial 0x1021, initial value 0), inverted, then masked
+    uint16_t c = (uint16_t)(crc_ccitt(b, 10) ^ 0xFFFF ^ mask);
     b[10] = (uint8_t)(c >> 8);
     b[11] = (uint8_t)(c & 0xFF);
 }
