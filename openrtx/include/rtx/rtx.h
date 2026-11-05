@@ -78,6 +78,11 @@ typedef struct
              p25RxInvert : 1,          /**< P25 invert RX baseband         */
              p25DstCheck : 1;          /**< P25 play only calls to us      */
 #endif
+#ifdef CONFIG_YSF_CS7000
+    char     ysfDest[11];              /**< YSF destination, "" = all   */
+    uint8_t  ysfTxDgid;                /**< YSF DG-ID sent, 0..99       */
+    uint8_t  ysfRxDgid;                /**< YSF DG-ID received, 0 = all */
+#endif
 }
 rtxStatus_t;
 

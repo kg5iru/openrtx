@@ -54,6 +54,20 @@ static void setDestination(const uint8_t *field, char out[11])
         strcpy(out, "ALL");
 }
 
+// A callsign as sent: upper case, padded with spaces to ten characters
+static void padCallsign(const char *in, uint8_t out[10])
+{
+    bool end = false;
+    for (size_t i = 0; i < CALLSIGN_LENGTH; i++) {
+        char c = end ? '\0' : in[i];
+        if (c == '\0')
+            end = true;
+        if ((c >= 'a') && (c <= 'z'))
+            c = c - 'a' + 'A';
+        out[i] = ((c > 0x20) && (c < 0x7F)) ? c : ' ';
+    }
+}
+
 bool ysf_getCallInfo(ysfCallInfo_t *out)
 {
     if (!callActive)
@@ -71,6 +85,7 @@ OpMode_YSF::OpMode_YSF()
     , unlockedTicks(0)
     , lastDt(0)
     , flywheel(0)
+    , rxDgid(0)
     , transmitting(false)
     , pttHeld(false)
     , txFn(0)
@@ -156,6 +171,8 @@ void OpMode_YSF::stopRx()
 void OpMode_YSF::update(rtxStatus_t *const status, const bool newCfg)
 {
     (void)newCfg;
+
+    rxDgid = status->ysfRxDgid;
 
     if ((status->opStatus == OFF) && enterRx) {
         startRx();
@@ -294,6 +311,19 @@ void OpMode_YSF::processFrame(const frame_t &frame)
     framesSinceGood = 0;
     flywheel = 0;
 
+    /*
+     * DG-ID filter: with an RX DG-ID set, calls on other DG-IDs are not
+     * played (0 receives them all, as on a Yaesu radio).
+     */
+    if ((rxDgid != 0) && (fich.dgid() != rxDgid)) {
+        if (callActive)
+            endCall("other DG-ID");
+        else if (fich.fi() == FI_HEADER)
+            LOG_I("ysf", "call on DG-ID %u ignored (RX DG-ID %u)", fich.dgid(),
+                  rxDgid);
+        return;
+    }
+
     switch (fich.fi()) {
         case FI_HEADER: {
             std::array<uint8_t, 20> csd;
@@ -399,16 +429,18 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
     }
     dmrDiag_set(DIAG_STAGE, STAGE_ENCODER);
 
-    // Own callsign, upper case, padded with spaces
-    bool end = false;
-    for (size_t i = 0; i < CALLSIGN_LENGTH; i++) {
-        char c = end ? '\0' : status->source_address[i];
-        if (c == '\0')
-            end = true;
-        if ((c >= 'a') && (c <= 'z'))
-            c = c - 'a' + 'A';
-        txSrc[i] = ((c > 0x20) && (c < 0x7F)) ? c : ' ';
-    }
+    /*
+     * Own callsign; destination: ten asterisks for a call to all (group call
+     * mode), else the callsign set (individual call mode, which receivers
+     * and MMDVMHost show as the destination).  DG-ID as set.
+     */
+    padCallsign(status->source_address, txSrc);
+    padCallsign(status->ysfDest, txDst);
+    bool toAll = (status->ysfDest[0] == '\0');
+    if (toAll)
+        memset(txDst, '*', sizeof(txDst));
+    txCm = toAll ? CM_GROUP1 : CM_INDIVIDUAL;
+    txDgid = status->ysfTxDgid;
 
     modulator = std::make_unique<Modulator>();
     modulator->init();
@@ -434,9 +466,11 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
     txStart = getTick();
     platform_ledOn(RED);
 
-    char src[11];
+    char src[11], dst[11];
     callsignToString(txSrc, src);
-    LOG_I("ysf", "tx start: %s > ALL, DN", src);
+    callsignToString(txDst, dst);
+    LOG_I("ysf", "tx start: %s > %s, DG-ID %u, DN", src, toAll ? "ALL" : dst,
+          txDgid);
 
     modulator->sendPreamble();
     sendControlFrame(FI_HEADER);
@@ -446,13 +480,14 @@ void OpMode_YSF::startTx(rtxStatus_t *const status)
 void OpMode_YSF::sendControlFrame(const uint8_t fi)
 {
     uint8_t csd1[20], csd2[20];
-    memset(csd1, '*', 10);
+    memcpy(csd1, txDst, 10);
     memcpy(&csd1[10], txSrc, 10);
     memset(csd2, ' ', sizeof(csd2));
 
     frame_t frame{};
     encodeSync(frame);
-    encodeFich(makeFich(fi, 0, TX_FRAME_TOTAL, DT_VD_MODE2, 0), frame);
+    encodeFich(makeFich(fi, 0, TX_FRAME_TOTAL, DT_VD_MODE2, txDgid, txCm),
+               frame);
     encodeCsd(csd1, csd2, frame);
     modulator->sendFrame(frame);
 }
@@ -461,7 +496,7 @@ void OpMode_YSF::sendVoiceFrame()
 {
     uint8_t dch[10];
     if (txFn == 0)
-        memset(dch, '*', sizeof(dch));
+        memcpy(dch, txDst, sizeof(dch));
     else if (txFn == 1)
         memcpy(dch, txSrc, sizeof(dch));
     else
@@ -470,7 +505,7 @@ void OpMode_YSF::sendVoiceFrame()
     frame_t frame{};
     encodeSync(frame);
     encodeFich(makeFich(FI_COMMUNICATIONS, txFn, TX_FRAME_TOTAL, DT_VD_MODE2,
-                        0),
+                        txDgid, txCm),
                frame);
     encodeVd2Dch(dch, frame);
 

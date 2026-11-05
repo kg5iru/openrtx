@@ -102,6 +102,9 @@ extern void _ui_drawSettingsFM(ui_state_t* ui_state);
 #ifdef CONFIG_DMR_CS7000
 extern void _ui_drawSettingsDMR(ui_state_t* ui_state);
 #endif
+#ifdef CONFIG_YSF_CS7000
+extern void _ui_drawSettingsYSF(ui_state_t* ui_state);
+#endif
 extern void _ui_drawSettingsVoicePrompts(ui_state_t* ui_state);
 #if defined(CONFIG_P25)
 extern void _ui_drawSettingsP25(ui_state_t* ui_state);
@@ -133,6 +136,9 @@ const char *settings_items[] = { "Display",
 #endif
 #ifdef CONFIG_DMR_CS7000
                                  "DMR",
+#endif
+#ifdef CONFIG_YSF_CS7000
+                                 "YSF",
 #endif
                                  "FM",
                                  "Accessibility",
@@ -179,6 +185,16 @@ const char *settings_dmr_items[] =
     "APRS ID",
     "APRS on PTT",
     "APRS Beacon"
+};
+#endif
+
+#ifdef CONFIG_YSF_CS7000
+const char *settings_ysf_items[] =
+{
+    "Destination",
+    "TX DG-ID",
+    "RX DG-ID",
+    "Mic Gain"
 };
 #endif
 
@@ -238,6 +254,9 @@ const uint8_t settings_fm_num = sizeof(settings_fm_items)
 #ifdef CONFIG_DMR_CS7000
 const uint8_t settings_dmr_num = sizeof(settings_dmr_items)
                                / sizeof(settings_dmr_items[0]);
+#endif
+#ifdef CONFIG_YSF_CS7000
+const uint8_t settings_ysf_num = sizeof(settings_ysf_items) / sizeof(settings_ysf_items[0]);
 #endif
 #if defined(CONFIG_P25)
 const uint8_t p25_num = sizeof(p25_items) / sizeof(p25_items[0]);
@@ -1137,6 +1156,38 @@ static bool _ui_stepDMRSetting(uint8_t item, bool up)
 }
 #endif
 
+#ifdef CONFIG_YSF_CS7000
+// Step a YSF setting up or down: DG-IDs wrap over 0..99, the mic gain is the
+// DMR one.  Returns false for the destination, which is typed in.
+static bool _ui_stepYSFSetting(uint8_t item, bool up)
+{
+    settings_t *s = &state.settings;
+    uint8_t *dgid;
+
+    switch(item)
+    {
+        case YSF_TX_DGID:
+            dgid = &s->ysf_txDgid;
+            break;
+
+        case YSF_RX_DGID:
+            dgid = &s->ysf_rxDgid;
+            break;
+
+        case YSF_MIC_GAIN:
+            return _ui_stepDMRSetting(DMR_MIC_GAIN, up);
+
+        default:
+            return false;
+    }
+
+    uint8_t v = settings_ysfDgid(*dgid);
+    v += up ? 1 : YSF_DGID_MAX;
+    *dgid = v % (YSF_DGID_MAX + 1);
+    return true;
+}
+#endif
+
 static void _ui_textInputReset(char *buf, size_t bufSize)
 {
     ui_state.input_number = 0;
@@ -2028,6 +2079,11 @@ void ui_updateFSM(bool *sync_rtx)
                             state.ui_screen = SETTINGS_P25;
                             break;
 #endif
+#ifdef CONFIG_YSF_CS7000
+                        case S_YSF:
+                            state.ui_screen = SETTINGS_YSF;
+                            break;
+#endif
                         case S_FM:
                             state.ui_screen = SETTINGS_FM;
                             break;
@@ -2728,6 +2784,115 @@ void ui_updateFSM(bool *sync_rtx)
                 }
                 break;
 #endif
+#ifdef CONFIG_YSF_CS7000
+            // YSF Settings: destination callsign, DG-IDs and mic gain
+            case SETTINGS_YSF:
+                if(ui_state.edit_mode)
+                {
+                    uint8_t sel = ui_state.menu_selected;
+                    if(sel == YSF_DESTINATION)
+                    {
+                        // Callsign, as for M17; empty = a call to all
+                        if(msg.keys & KEY_ENTER)
+                        {
+                            _ui_textInputConfirm(ui_state.new_callsign);
+                            memset(state.settings.ysf_dest, 0,
+                                   sizeof(state.settings.ysf_dest));
+                            strncpy(state.settings.ysf_dest,
+                                    ui_state.new_callsign,
+                                    sizeof(state.settings.ysf_dest));
+                            ui_state.edit_mode = false;
+                            *sync_rtx = true;
+                        }
+                        else if(msg.keys & KEY_ESC)
+                        {
+                            ui_state.edit_mode = false;
+                        }
+                        else if(msg.keys & KEY_UP || msg.keys & KEY_DOWN ||
+                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT)
+                        {
+                            _ui_textInputDel(ui_state.new_callsign);
+                        }
+                        else if(input_isCharPressed(msg))
+                        {
+                            _ui_textInputKeypad(ui_state.new_callsign, 9, msg,
+                                                true);
+                        }
+                    }
+                    else if(sel == YSF_MIC_GAIN)
+                    {
+                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
+                           msg.keys & KEY_LEFT)
+                            _ui_stepYSFSetting(sel, false);
+                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
+                                msg.keys & KEY_RIGHT)
+                            _ui_stepYSFSetting(sel, true);
+                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        *sync_rtx = true;
+                    }
+                    else // DG-IDs: up to two digits, 0..99
+                    {
+                        size_t len = strnlen(ui_state.new_dmr_tg,
+                                             sizeof(ui_state.new_dmr_tg));
+                        if(msg.keys & KEY_ENTER)
+                        {
+                            uint8_t v = 0;
+                            for(size_t i = 0; i < len; i++)
+                                v = (v * 10) + (ui_state.new_dmr_tg[i] - '0');
+                            if(sel == YSF_TX_DGID)
+                                state.settings.ysf_txDgid = v;
+                            else
+                                state.settings.ysf_rxDgid = v;
+                            ui_state.edit_mode = false;
+                            *sync_rtx = true;
+                        }
+                        else if(msg.keys & KEY_ESC)
+                        {
+                            ui_state.edit_mode = false;
+                        }
+                        else if(msg.keys & KEY_UP || msg.keys & KEY_DOWN ||
+                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT)
+                        {
+                            if(len > 0)
+                                ui_state.new_dmr_tg[len - 1] = '\0';
+                        }
+                        else if(input_isNumberPressed(msg) && (len < 2))
+                        {
+                            ui_state.new_dmr_tg[len] = '0' +
+                                                input_getPressedNumber(msg);
+                            ui_state.new_dmr_tg[len + 1] = '\0';
+                        }
+                    }
+                }
+                else if(msg.keys & KEY_ENTER)
+                {
+                    ui_state.edit_mode = true;
+                    if(ui_state.menu_selected == YSF_DESTINATION)
+                        _ui_textInputReset(ui_state.new_callsign,
+                                           sizeof(ui_state.new_callsign));
+                    else
+                        memset(ui_state.new_dmr_tg, 0,
+                               sizeof(ui_state.new_dmr_tg));
+                }
+                else if(msg.keys & KEY_UP || msg.keys & KNOB_LEFT)
+                    _ui_menuUp(settings_ysf_num);
+                else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
+                    _ui_menuDown(settings_ysf_num);
+                // Left/right step the DG-IDs and mic gain outside edit mode
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        _ui_stepYSFSetting(ui_state.menu_selected,
+                                           (msg.keys & KEY_RIGHT) != 0))
+                {
+                    *sync_rtx = true;
+                }
+                else if(msg.keys & KEY_ESC)
+                {
+                    *sync_rtx = true;
+                    _ui_menuBack(MENU_SETTINGS);
+                }
+                break;
+#endif
             case SETTINGS_FM:
                 if (ui_state.edit_mode) {
                     if (msg.keys & KEY_ESC)
@@ -2999,6 +3164,11 @@ bool ui_updateGUI()
 #ifdef CONFIG_DMR_CS7000
         case SETTINGS_DMR:
             _ui_drawSettingsDMR(&ui_state);
+            break;
+#endif
+#ifdef CONFIG_YSF_CS7000
+        case SETTINGS_YSF:
+            _ui_drawSettingsYSF(&ui_state);
             break;
 #endif
         case SETTINGS_FM:

@@ -505,6 +505,17 @@ TEST_CASE("YSF FICH encoder matches the reference and decodes", "[ysf]")
     REQUIRE(f.ft() == 6);
     REQUIRE(f.dt() == DT_VD_MODE2);
     REQUIRE(f.dgid() == 0);
+
+    // An individual call on a DG-ID, through the channel coding and back
+    Fich ind = makeFich(FI_HEADER, 0, 6, DT_VD_MODE2, 42, CM_INDIVIDUAL);
+    frame_t frame{};
+    encodeFich(ind, frame);
+    Fich back;
+    REQUIRE(dec.decodeFich(frame, back));
+    REQUIRE(back.fi() == FI_HEADER);
+    REQUIRE(back.cm() == CM_INDIVIDUAL);
+    REQUIRE(back.dgid() == 42);
+    REQUIRE(back.dt() == DT_VD_MODE2);
 }
 
 TEST_CASE("YSF data channel encoders match the reference and decode", "[ysf]")

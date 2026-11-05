@@ -563,6 +563,103 @@ void _ui_drawSettingsDMR(ui_state_t* ui_state)
 }
 #endif
 
+#ifdef CONFIG_YSF_CS7000
+// DG-ID being typed in Settings > YSF, shown in place of the stored one
+static const char *ysfTyping = NULL;
+static uint8_t ysfTypingRow = 0;
+
+int _ui_getYSFEntryName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_ysf_num)
+        return -1;
+
+    sniprintf(buf, max_len, "%s", settings_ysf_items[index]);
+    return 0;
+}
+
+int _ui_getYSFValueName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_ysf_num)
+        return -1;
+
+    const settings_t *s = &last_state.settings;
+    bool typing = (ysfTyping != NULL) && (index == ysfTypingRow);
+
+    switch(index)
+    {
+        case YSF_DESTINATION:
+            if(s->ysf_dest[0] == '\0')
+                sniprintf(buf, max_len, "All");
+            else
+                sniprintf(buf, max_len, "%.10s", s->ysf_dest);
+            break;
+
+        case YSF_TX_DGID:
+            if(typing)
+                sniprintf(buf, max_len, "%s_", ysfTyping);
+            else
+                sniprintf(buf, max_len, "%u", settings_ysfDgid(s->ysf_txDgid));
+            break;
+
+        case YSF_RX_DGID:
+        {
+            uint8_t dgid = settings_ysfDgid(s->ysf_rxDgid);
+            if(typing)
+                sniprintf(buf, max_len, "%s_", ysfTyping);
+            else if(dgid == 0)
+                sniprintf(buf, max_len, "All");
+            else
+                sniprintf(buf, max_len, "%u", dgid);
+            break;
+        }
+
+        case YSF_MIC_GAIN:
+        {
+            int db = (3 * (int) settings_dmrMicGainStep(s)) - 12;
+            sniprintf(buf, max_len, "%+d dB", db);
+            break;
+        }
+    }
+
+    return 0;
+}
+
+void _ui_drawSettingsYSF(ui_state_t* ui_state)
+{
+    gfx_clearScreen();
+    // Print "YSF" on top bar
+    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
+              "YSF");
+
+    if(ui_state->edit_mode && (ui_state->menu_selected == YSF_DESTINATION))
+    {
+        // Destination callsign being typed, as the M17 callsign
+        uint16_t rect_width = CONFIG_SCREEN_WIDTH - (layout.horizontal_pad * 2);
+        uint16_t rect_height = (CONFIG_SCREEN_HEIGHT - (layout.top_h + layout.bottom_h))/2;
+        point_t rect_origin = {(CONFIG_SCREEN_WIDTH - rect_width) / 2,
+                               (CONFIG_SCREEN_HEIGHT - rect_height) / 2};
+
+        gfx_printLine(1, 4, layout.top_h, CONFIG_SCREEN_HEIGHT - layout.bottom_h,
+                      layout.horizontal_pad, layout.menu_font,
+                      TEXT_ALIGN_LEFT, color_white, "Destination (empty: all)");
+        gfx_drawRect(rect_origin, rect_width, rect_height, color_white, false);
+        gfx_printLine(1, 1, layout.top_h, CONFIG_SCREEN_HEIGHT - layout.bottom_h,
+                      layout.horizontal_pad, layout.input_font,
+                      TEXT_ALIGN_CENTER, color_white, ui_state->new_callsign);
+        return;
+    }
+
+    bool typing = ui_state->edit_mode &&
+                  ((ui_state->menu_selected == YSF_TX_DGID) ||
+                   (ui_state->menu_selected == YSF_RX_DGID));
+    ysfTyping = typing ? ui_state->new_dmr_tg : NULL;
+    ysfTypingRow = ui_state->menu_selected;
+    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+                          _ui_getYSFEntryName, _ui_getYSFValueName);
+    ysfTyping = NULL;
+}
+#endif
+
 int _ui_getFMEntryName(char *buf, uint8_t max_len, uint8_t index)
 {
     if (index >= settings_fm_num)
