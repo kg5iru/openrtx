@@ -666,6 +666,86 @@ void _ui_drawSettingsYSF(ui_state_t* ui_state)
 }
 #endif
 
+#ifdef CONFIG_NXDN_CS7000
+// Number being typed in Settings > NXDN, shown in place of the stored one
+static const char *nxdnTyping = NULL;
+static uint8_t nxdnTypingRow = 0;
+
+int _ui_getNXDNEntryName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_nxdn_num)
+        return -1;
+
+    sniprintf(buf, max_len, "%s", settings_nxdn_items[index]);
+    return 0;
+}
+
+int _ui_getNXDNValueName(char *buf, uint8_t max_len, uint8_t index)
+{
+    if(index >= settings_nxdn_num)
+        return -1;
+
+    const settings_t *s = &last_state.settings;
+    if((nxdnTyping != NULL) && (index == nxdnTypingRow))
+    {
+        sniprintf(buf, max_len, "%s_", nxdnTyping);
+        return 0;
+    }
+
+    switch(index)
+    {
+        case NXDN_RAN:
+        {
+            uint8_t ran = settings_nxdnRan(s);
+            if(ran == 0)
+                sniprintf(buf, max_len, "Any");
+            else
+                sniprintf(buf, max_len, "%u", ran);
+            break;
+        }
+
+        case NXDN_UNIT_ID:
+        {
+            uint16_t id = settings_nxdnId(s);
+            if(id == 0)
+                sniprintf(buf, max_len, "Not set");
+            else
+                sniprintf(buf, max_len, "%u", id);
+            break;
+        }
+
+        case NXDN_TALKGROUP:
+            sniprintf(buf, max_len, "%u", settings_nxdnTg(s));
+            break;
+
+        case NXDN_MIC_GAIN:
+        {
+            int db = (3 * (int) settings_dmrMicGainStep(s)) - 12;
+            sniprintf(buf, max_len, "%+d dB", db);
+            break;
+        }
+    }
+
+    return 0;
+}
+
+void _ui_drawSettingsNXDN(ui_state_t* ui_state)
+{
+    gfx_clearScreen();
+    // Print "NXDN" on top bar
+    gfx_print(layout.top_pos, layout.top_font, TEXT_ALIGN_CENTER, color_white,
+              "NXDN");
+
+    bool typing = ui_state->edit_mode &&
+                  (ui_state->menu_selected != NXDN_MIC_GAIN);
+    nxdnTyping = typing ? ui_state->new_dmr_tg : NULL;
+    nxdnTypingRow = ui_state->menu_selected;
+    _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
+                          _ui_getNXDNEntryName, _ui_getNXDNValueName);
+    nxdnTyping = NULL;
+}
+#endif
+
 int _ui_getFMEntryName(char *buf, uint8_t max_len, uint8_t index)
 {
     if (index >= settings_fm_num)
@@ -1632,6 +1712,12 @@ bool _ui_drawMacroMenu(ui_state_t *ui_state)
 #ifdef CONFIG_YSF_CS7000
         case OPMODE_YSF:
             gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER, color_white, "          YSF");
+            break;
+#endif
+#ifdef CONFIG_NXDN_CS7000
+        case OPMODE_NXDN:
+            gfx_print(pos_2, layout.top_font, TEXT_ALIGN_CENTER, color_white,
+                      "          NXDN");
             break;
 #endif
     }

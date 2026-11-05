@@ -21,6 +21,9 @@
 #ifdef CONFIG_YSF_CS7000
 #include "ysf_CS7000.h"
 #endif
+#ifdef CONFIG_NXDN_CS7000
+#include "nxdn_CS7000.h"
+#endif
 
 void _ui_drawMainBackground()
 {
@@ -251,6 +254,61 @@ void _ui_drawModeInfo(ui_state_t *ui_state)
                 gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
                           color_white, "no voice codec");
             #endif
+            break;
+        }
+        #endif
+
+        #ifdef CONFIG_NXDN_CS7000
+        case OPMODE_NXDN:
+        {
+            nxdnCallInfo_t call;
+            const settings_t *s = &last_state.settings;
+            if(nxdn_getCallInfo(&call))
+            {
+                // Source ID, then destination (from the header, or once a
+                // whole superframe of a late entry is in)
+                if(call.ids)
+                {
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "%u", call.src);
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "%s %u RAN%u",
+                              call.group ? "TG" : "ID", call.dst, call.ran);
+                }
+                else
+                {
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "...");
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "RAN%u",
+                              call.ran);
+                }
+            }
+            else
+            {
+                // Idle: the own ID (needed to transmit) and where the PTT
+                // sends (Settings > NXDN)
+                uint16_t id = settings_nxdnId(s);
+                if(id == 0)
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "No NXDN ID");
+                else
+                    gfx_print(layout.line1_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "ID %u", id);
+                uint8_t ran = settings_nxdnRan(s);
+                if(ran == 0)
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "NXDN TG%u",
+                              settings_nxdnTg(s));
+                else
+                    gfx_print(layout.line2_pos, layout.line2_font,
+                              TEXT_ALIGN_CENTER, color_white, "NXDN TG%u RAN%u",
+                              settings_nxdnTg(s), ran);
+            }
+
+            if(dmrAudio_codecStatus() != DMR_CODEC_OK)
+                gfx_print(layout.line3_pos, layout.line3_font, TEXT_ALIGN_CENTER,
+                          color_white, "no voice codec");
             break;
         }
         #endif
@@ -486,6 +544,9 @@ void _ui_drawMainBottom()
         case OPMODE_DMR:
 #ifdef CONFIG_YSF_CS7000
         case OPMODE_YSF:
+#endif
+#ifdef CONFIG_NXDN_CS7000
+        case OPMODE_NXDN:
 #endif
             gfx_drawSmeterLevel(meter_pos, meter_width, meter_height, rssi,
                                 mic_level, volume, true);

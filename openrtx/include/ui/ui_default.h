@@ -58,6 +58,9 @@ enum uiScreen {
 #ifdef CONFIG_YSF_CS7000
     SETTINGS_YSF,
 #endif
+#ifdef CONFIG_NXDN_CS7000
+    SETTINGS_NXDN,
+#endif
     SETTINGS_FM,
     SETTINGS_ACCESSIBILITY,
     SETTINGS_RESET2DEFAULTS,
@@ -100,6 +103,9 @@ enum settingsItems {
 #endif
 #ifdef CONFIG_YSF_CS7000
     S_YSF,
+#endif
+#ifdef CONFIG_NXDN_CS7000
+    S_NXDN,
 #endif
     S_FM,
     S_ACCESSIBILITY,
@@ -199,6 +205,21 @@ enum settingsYSFItems
 #ifdef CONFIG_P25
     YSF_TX_MODE         // DN or VW (IMBE, through the P25 vocoder)
 #endif
+};
+#endif
+
+#ifdef CONFIG_NXDN_CS7000
+#ifndef CONFIG_DMR_CS7000
+#error "The NXDN mode needs the DMR voice support (option cs7000_ambe)"
+#endif
+
+// Settings > NXDN; the mic gain is the one the DMR mode uses
+enum settingsNXDNItems
+{
+    NXDN_RAN = 0,
+    NXDN_UNIT_ID,
+    NXDN_TALKGROUP,
+    NXDN_MIC_GAIN
 };
 #endif
 
@@ -329,6 +350,10 @@ extern const uint8_t settings_dmr_num;
 #ifdef CONFIG_YSF_CS7000
 extern const char *settings_ysf_items[];
 extern const uint8_t settings_ysf_num;
+#endif
+#ifdef CONFIG_NXDN_CS7000
+extern const char *settings_nxdn_items[];
+extern const uint8_t settings_nxdn_num;
 #endif
 extern const char *mode_items[];
 #if defined(CONFIG_P25)
