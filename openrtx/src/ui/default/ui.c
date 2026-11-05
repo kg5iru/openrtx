@@ -190,7 +190,10 @@ const char *settings_dmr_items[] =
     "Mic Gain",
     "Private Call",
     "Talker Alias",
-    "Monitor"
+    "Monitor",
+    "APRS ID",
+    "APRS on PTT",
+    "APRS Beacon"
 };
 #endif
 
@@ -2540,6 +2543,34 @@ void ui_updateFSM(bool *sync_rtx)
                             ui_state.edit_mode = false;
                         *sync_rtx = true;
                     }
+                    else if(ui_state.menu_selected == DMR_APRS_INTERVAL)
+                    {
+                        uint8_t i = state.settings.dmr_aprsInterval;
+                        if(i >= DMR_APRS_INTERVALS)
+                            i = 0;
+                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
+                           msg.keys & KEY_LEFT)
+                            i = (i + DMR_APRS_INTERVALS - 1) %
+                                DMR_APRS_INTERVALS;
+                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
+                                msg.keys & KEY_RIGHT)
+                            i = (i + 1) % DMR_APRS_INTERVALS;
+                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        state.settings.dmr_aprsInterval = i;
+                        *sync_rtx = true;
+                    }
+                    else if(ui_state.menu_selected == DMR_APRS_PTT)
+                    {
+                        if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        else if(msg.keys & KEY_DOWN || msg.keys & KEY_UP ||
+                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
+                                msg.keys & KNOB_LEFT || msg.keys & KNOB_RIGHT)
+                            state.settings.dmr_aprsPtt =
+                                (state.settings.dmr_aprsPtt == 0) ? 1 : 0;
+                        *sync_rtx = true;
+                    }
                     else if(ui_state.menu_selected == DMR_MONITOR)
                     {
                         // Off -> Single TS -> Any TS -> Off
@@ -2594,6 +2625,8 @@ void ui_updateFSM(bool *sync_rtx)
                                 state.settings.dmr_id = tg;
                             else if(ui_state.menu_selected == DMR_PRIVATE_ID)
                                 state.settings.dmr_privId = tg;
+                            else if(ui_state.menu_selected == DMR_APRS_ID)
+                                state.settings.dmr_aprsId = tg;
                             else
                                 state.settings.dmr_rxTg = tg;
                             ui_state.edit_mode = false;
@@ -2623,7 +2656,8 @@ void ui_updateFSM(bool *sync_rtx)
                     ui_state.edit_mode = true;
                     if((ui_state.menu_selected == DMR_TALKGROUP) ||
                        (ui_state.menu_selected == DMR_RADIO_ID) ||
-                       (ui_state.menu_selected == DMR_PRIVATE_ID))
+                       (ui_state.menu_selected == DMR_PRIVATE_ID) ||
+                       (ui_state.menu_selected == DMR_APRS_ID))
                         memset(ui_state.new_dmr_tg, 0,
                                sizeof(ui_state.new_dmr_tg));
                 }
@@ -2647,6 +2681,23 @@ void ui_updateFSM(bool *sync_rtx)
                         settings_setDmrMicGainStep(&state.settings, g + 1);
                     else if((msg.keys & KEY_LEFT) && (g > 0))
                         settings_setDmrMicGainStep(&state.settings, g - 1);
+                    *sync_rtx = true;
+                }
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_APRS_PTT))
+                {
+                    state.settings.dmr_aprsPtt =
+                        (state.settings.dmr_aprsPtt == 0) ? 1 : 0;
+                    *sync_rtx = true;
+                }
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_APRS_INTERVAL))
+                {
+                    uint8_t i = state.settings.dmr_aprsInterval;
+                    if(i >= DMR_APRS_INTERVALS)
+                        i = 0;
+                    i += (msg.keys & KEY_RIGHT) ? 1 : (DMR_APRS_INTERVALS - 1);
+                    state.settings.dmr_aprsInterval = i % DMR_APRS_INTERVALS;
                     *sync_rtx = true;
                 }
                 else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&

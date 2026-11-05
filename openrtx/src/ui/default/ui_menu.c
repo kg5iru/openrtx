@@ -512,6 +512,29 @@ int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
                 sniprintf(buf, max_len, "%lu",
                           (unsigned long) last_state.settings.dmr_privId);
             break;
+        case DMR_APRS_ID:
+            if(dmrTgTyping != NULL)
+                sniprintf(buf, max_len, "%s_", dmrTgTyping);
+            else if(last_state.settings.dmr_aprsId == 0)
+                sniprintf(buf, max_len, "Off");
+            else
+                sniprintf(buf, max_len, "%lu",
+                          (unsigned long) last_state.settings.dmr_aprsId);
+            break;
+        case DMR_APRS_PTT:
+            sniprintf(buf, max_len, "%s",
+                      (last_state.settings.dmr_aprsPtt != 0) ? "On" : "Off");
+            break;
+        case DMR_APRS_INTERVAL:
+        {
+            uint16_t sec = settings_dmrAprsIntervalSec(
+                               last_state.settings.dmr_aprsInterval);
+            if(sec == 0)
+                sniprintf(buf, max_len, "Off");
+            else
+                sniprintf(buf, max_len, "%u min", sec / 60);
+            break;
+        }
         case DMR_MONITOR:
         {
             static const char *modes[] = { "Off", "Single TS", "Any TS" };
@@ -547,7 +570,8 @@ void _ui_drawSettingsDMR(ui_state_t* ui_state)
     bool typing = ui_state->edit_mode &&
                   ((ui_state->menu_selected == DMR_TALKGROUP) ||
                    (ui_state->menu_selected == DMR_RADIO_ID) ||
-                   (ui_state->menu_selected == DMR_PRIVATE_ID));
+                   (ui_state->menu_selected == DMR_PRIVATE_ID) ||
+                   (ui_state->menu_selected == DMR_APRS_ID));
     dmrTgTyping = typing ? ui_state->new_dmr_tg : NULL;
     _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
                           _ui_getDMREntryName, _ui_getDMRValueName);
