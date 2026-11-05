@@ -12,7 +12,11 @@
 using namespace YSF;
 
 Modulator::Modulator()
-    : idleBuffer(nullptr), outStream(-1), outPath(-1), txRunning(false)
+    : idleBuffer(nullptr)
+    , outStream(-1)
+    , outPath(-1)
+    , txRunning(false)
+    , invPhase(false)
 {
 }
 
@@ -103,6 +107,11 @@ void Modulator::stop()
     outPath = -1;
 }
 
+void Modulator::invertPhase(const bool status)
+{
+    invPhase = status;
+}
+
 void Modulator::symbolsToBaseband()
 {
     memset(idleBuffer, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
@@ -113,6 +122,12 @@ void Modulator::symbolsToBaseband()
     for (size_t i = 0; i < FRAME_SAMPLES; i++) {
         float elem = static_cast<float>(idleBuffer[i]);
         elem = M17::rrc_48k(elem * RRC_GAIN);
+        if (invPhase)
+            elem = -elem;
+        if (elem > 32767.0f)
+            elem = 32767.0f;
+        else if (elem < -32768.0f)
+            elem = -32768.0f;
         idleBuffer[i] = static_cast<int16_t>(elem);
     }
 }
