@@ -13,15 +13,15 @@
 using namespace YSF;
 
 Fich YSF::makeFich(const uint8_t fi, const uint8_t fn, const uint8_t ft,
-                   const uint8_t dt, const uint8_t dgid)
+                   const uint8_t dt, const uint8_t dgid, const uint8_t cm)
 {
     Fich fich;
 
-    // CS 2, call mode group (CQ), block 0 of 1, normal deviation, direct
-    // route, no VoIP: raw bytes start at zero
+    // CS 2, block 0 of 1, normal deviation, direct route, no VoIP: raw bytes
+    // start at zero
     fich.setFi(fi);
     fich.setCs(2);
-    fich.setCm(CM_GROUP1);
+    fich.setCm(cm);
     fich.setFn(fn);
     fich.setFt(ft);
     fich.setDt(dt);

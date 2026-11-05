@@ -27,12 +27,15 @@ namespace YSF
  * @param ft: frame total.
  * @param dt: data type.
  * @param dgid: DG-ID, 0..127.
- * @return a FICH with callsign information 2, call mode group (CQ), block
- * 0 of 1, normal deviation, direct route, no VoIP, as a radio sends it
- * (the values MMDVM's DMR2YSF uses).
+ * @param cm: call mode, CM_GROUP1 (a call to all, "CQ") or CM_INDIVIDUAL
+ * (a call to the destination callsign).
+ * @return a FICH with callsign information 2, block 0 of 1, normal
+ * deviation, direct route, no VoIP, as a radio sends it (the values MMDVM's
+ * DMR2YSF uses).
  */
 Fich makeFich(const uint8_t fi, const uint8_t fn, const uint8_t ft,
-              const uint8_t dt, const uint8_t dgid);
+              const uint8_t dt, const uint8_t dgid,
+              const uint8_t cm = CM_GROUP1);
 
 /**
  * Write the sync word at the start of a frame.
