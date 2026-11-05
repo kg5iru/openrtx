@@ -59,6 +59,7 @@ typedef struct
     uint8_t dmr_micGain;          // DMR mic gain step + 1, 0 = not set (0 dB)
     uint32_t dmr_privId;          // DMR private call target, 0 = group calls
     uint8_t dmr_taOff;            // 1 = don't send the DMR talker alias
+    uint8_t dmr_monitor;          // DMR monitor: 0 off, 1 own TS, 2 any TS
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -96,6 +97,7 @@ static const settings_t default_settings =
     0,                            // DMR mic gain not set (0 dB)
     0,                            // DMR group calls
     0,                            // Send the DMR talker alias
+    0,                            // DMR monitor off
 #endif
 };
 
@@ -131,6 +133,16 @@ static inline uint8_t settings_dmrMicGainStep(const settings_t *s)
 static inline void settings_setDmrMicGainStep(settings_t *s, uint8_t step)
 {
     s->dmr_micGain = (step % DMR_MIC_GAIN_STEPS) + 1;
+}
+
+/*
+ * DMR digital monitor: 0 = off (talkgroup, private call and timeslot
+ * filters apply), 1 = single timeslot (every call on the timeslot set),
+ * 2 = any timeslot (every call).
+ */
+static inline uint8_t settings_dmrMonitor(const settings_t *s)
+{
+    return (s->dmr_monitor > 2) ? 0 : s->dmr_monitor;
 }
 
 // DMR timeslot filter: 0 = either timeslot, 1 = TS1, 2 = TS2

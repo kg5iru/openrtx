@@ -61,6 +61,7 @@ typedef struct
     uint8_t  dmrMicGain;               /**< DMR mic gain step, 0..8    */
     uint32_t dmrPrivateId;             /**< DMR private call ID, 0 = TG */
     bool     dmrTalkerAlias;           /**< DMR: send callsign as alias */
+    uint8_t  dmrMonitor;               /**< DMR monitor: 0, 1 TS, 2 any */
 #endif
 }
 rtxStatus_t;
