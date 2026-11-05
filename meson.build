@@ -606,7 +606,8 @@ cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime'}
 if get_option('cs7000_ambe')
   cs7000p_src += ['platform/drivers/vocoder/ambe_cs7000.c',
                   'platform/drivers/baseband/OpMode_DMR_CS7000.cpp',
-                  'platform/drivers/baseband/OpMode_YSF_CS7000.cpp'] + ysf_src
+                  'platform/drivers/baseband/OpMode_YSF_CS7000.cpp',
+                  'openrtx/src/protocols/YSF/Modulator.cpp'] + ysf_src
   cs7000p_inc += ['platform/drivers/vocoder', 'platform/drivers/baseband']
   cs7000p_def += {'CS7000_AMBE': '', 'CONFIG_DMR_CS7000': '',
                   'CONFIG_YSF_CS7000': ''}
