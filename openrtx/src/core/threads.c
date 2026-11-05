@@ -109,6 +109,12 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.dmrAprsInterval =
                 settings_dmrAprsIntervalSec(state.settings.dmr_aprsInterval);
             #endif
+            #ifdef CONFIG_YSF_CS7000
+            memset(rtx_cfg.ysfDest, 0, sizeof(rtx_cfg.ysfDest));
+            strncpy(rtx_cfg.ysfDest, state.settings.ysf_dest, 10);
+            rtx_cfg.ysfTxDgid = settings_ysfDgid(state.settings.ysf_txDgid);
+            rtx_cfg.ysfRxDgid = settings_ysfDgid(state.settings.ysf_rxDgid);
+            #endif
 
             pthread_mutex_unlock(&rtx_mutex);
 

@@ -64,6 +64,11 @@ typedef struct
     uint8_t dmr_aprsPtt;          // 1 = send the position after each TX
     uint8_t dmr_aprsInterval;     // DMR APRS beacon interval index, 0 = off
 #endif
+#ifdef CONFIG_YSF_CS7000
+    char    ysf_dest[10];         // YSF destination callsign, empty = all
+    uint8_t ysf_txDgid;           // YSF DG-ID sent, 0..99
+    uint8_t ysf_rxDgid;           // YSF DG-ID received, 0 = all, 1..99
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -104,6 +109,11 @@ static const settings_t default_settings =
     0,                            // DMR APRS off
     0,                            // No DMR APRS after TX
     0,                            // No DMR APRS beacon
+#endif
+#ifdef CONFIG_YSF_CS7000
+    "",                           // YSF call to all
+    0,                            // YSF DG-ID 0
+    0,                            // Receive every YSF DG-ID
 #endif
 };
 
@@ -168,6 +178,20 @@ static inline uint16_t settings_dmrAprsIntervalSec(uint8_t index)
 static inline uint8_t settings_dmrTimeslot(const settings_t *s)
 {
     return (s->dmr_ts > 2) ? 0 : s->dmr_ts;
+}
+#endif
+
+#ifdef CONFIG_YSF_CS7000
+/*
+ * YSF DG-ID (Digital Group ID), 0..99, as Yaesu radios set it.  Received
+ * calls are filtered on the RX DG-ID unless it is 0, which receives every
+ * DG-ID, as on a Yaesu radio.
+ */
+#define YSF_DGID_MAX 99
+
+static inline uint8_t settings_ysfDgid(uint8_t value)
+{
+    return (value > YSF_DGID_MAX) ? 0 : value;
 }
 #endif
 
