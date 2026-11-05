@@ -467,3 +467,104 @@ TEST_CASE("YSF V/D mode 1 voice is copied as is", "[ysf]")
     for (int i = 0; i < 9; i++)
         REQUIRE(out[i] == PAYLOAD_OFFSET + 36 + 9 + i);
 }
+
+/*
+ * Transmit side: the production encoder against the reference encoder above
+ * (bit for bit on the parts it writes) and against the decoder.
+ */
+#include "protocols/YSF/FrameEncoder.hpp"
+
+TEST_CASE("YSF FICH encoder matches the reference and decodes", "[ysf]")
+{
+    ref::crcInit();
+    std::mt19937 rng(11);
+    FrameDecoder dec;
+
+    for (int t = 0; t < 300; t++) {
+        uint8_t raw[4] = { (uint8_t)rng(), (uint8_t)rng(), (uint8_t)rng(),
+                           (uint8_t)rng() };
+        frame_t want{}, got{};
+        ref::encodeFich(raw, want.data());
+
+        Fich f;
+        memcpy(f.raw.data(), raw, 4);
+        encodeFich(f, got);
+        REQUIRE(memcmp(got.data(), want.data(), FRAME_BYTES) == 0);
+
+        Fich back;
+        REQUIRE(dec.decodeFich(got, back));
+        REQUIRE(memcmp(back.raw.data(), raw, 4) == 0);
+    }
+
+    // The FICH a radio sends for V/D mode 2 voice
+    Fich f = makeFich(FI_COMMUNICATIONS, 3, 6, DT_VD_MODE2, 0);
+    REQUIRE(f.fi() == FI_COMMUNICATIONS);
+    REQUIRE(f.cs() == 2);
+    REQUIRE(f.cm() == CM_GROUP1);
+    REQUIRE(f.fn() == 3);
+    REQUIRE(f.ft() == 6);
+    REQUIRE(f.dt() == DT_VD_MODE2);
+    REQUIRE(f.dgid() == 0);
+}
+
+TEST_CASE("YSF data channel encoders match the reference and decode", "[ysf]")
+{
+    ref::crcInit();
+    std::mt19937 rng(12);
+    FrameDecoder dec;
+
+    for (int t = 0; t < 200; t++) {
+        uint8_t dch[10], csd1[20], csd2[20];
+        for (auto &c : dch)
+            c = 0x20 + (rng() % 95);
+        for (auto &c : csd1)
+            c = 0x20 + (rng() % 95);
+        for (auto &c : csd2)
+            c = 0x20 + (rng() % 95);
+
+        frame_t want{}, got{};
+        ref::encodeDataChannel(dch, 10, want.data(), 5, 0);
+        encodeVd2Dch(dch, got);
+        REQUIRE(memcmp(got.data(), want.data(), FRAME_BYTES) == 0);
+        std::array<uint8_t, 10> out10;
+        REQUIRE(dec.decodeVd2Dch(got, out10));
+        REQUIRE(memcmp(out10.data(), dch, 10) == 0);
+
+        frame_t want2{}, got2{};
+        ref::encodeDataChannel(csd1, 20, want2.data(), 9, 0);
+        ref::encodeDataChannel(csd2, 20, want2.data(), 9, 9);
+        encodeCsd(csd1, csd2, got2);
+        REQUIRE(memcmp(got2.data(), want2.data(), FRAME_BYTES) == 0);
+        std::array<uint8_t, 20> out20;
+        REQUIRE(dec.decodeCsd(got2, 1, out20));
+        REQUIRE(memcmp(out20.data(), csd1, 20) == 0);
+        REQUIRE(dec.decodeCsd(got2, 2, out20));
+        REQUIRE(memcmp(out20.data(), csd2, 20) == 0);
+    }
+}
+
+TEST_CASE("YSF V/D mode 2 voice encoder matches the reference and decodes",
+          "[ysf]")
+{
+    std::mt19937 rng(13);
+
+    for (int t = 0; t < 300; t++) {
+        frame_t want{}, got{};
+        uint8_t ambe[5][9];
+        for (size_t n = 0; n < 5; n++) {
+            uint32_t a = rng() % 48; // within the reference PRNG table
+            uint32_t b = rng() & 0xFFF;
+            uint32_t c = rng() & 0x1FFFFFF;
+            ref::encodeVd2Voice(a, b, c, want.data(), n);
+            ambeFieldsToDmr(a, b, c, ambe[n]);
+            encodeVd2Voice(ambe[n], n, got);
+        }
+        REQUIRE(memcmp(got.data(), want.data(), FRAME_BYTES) == 0);
+
+        for (size_t n = 0; n < 5; n++) {
+            uint8_t back[9];
+            REQUIRE(vd2VoiceToDmr(got, n, back) == 0);
+            REQUIRE(memcmp(back, ambe[n], 9) == 0);
+        }
+    }
+}
