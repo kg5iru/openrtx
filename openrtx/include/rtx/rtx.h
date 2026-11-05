@@ -86,6 +86,11 @@ typedef struct
 #if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
     bool     ysfTxVw;                  /**< YSF voice full rate (VW)    */
 #endif
+#ifdef CONFIG_NXDN_CS7000
+    uint8_t  nxdnRan;                  /**< NXDN RAN, 0 = any           */
+    uint16_t nxdnId;                   /**< Own NXDN ID, 0 = not set    */
+    uint16_t nxdnTg;                   /**< NXDN talkgroup called       */
+#endif
 }
 rtxStatus_t;
 
@@ -110,7 +115,8 @@ enum opmode
 #ifdef CONFIG_P25
     OPMODE_P25  = 4,        /**< P25                */
 #endif
-    OPMODE_YSF  = 5         /**< Yaesu System Fusion */
+    OPMODE_YSF  = 5,        /**< Yaesu System Fusion */
+    OPMODE_NXDN = 6         /**< NXDN (NXDN48)       */
 };
 
 /**

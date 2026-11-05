@@ -16,6 +16,9 @@
 #ifdef CONFIG_YSF_CS7000
 #include "OpMode_YSF_CS7000.hpp"
 #endif
+#ifdef CONFIG_NXDN_CS7000
+#include "OpMode_NXDN_CS7000.hpp"
+#endif
 #ifdef CONFIG_P25
 #include "rtx/OpMode_P25.hpp"
 #endif
@@ -34,6 +37,9 @@ static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
 #ifdef CONFIG_YSF_CS7000
 static OpMode_YSF ysfMode;              // YSF on CS7000-M17 Plus
+#endif
+#ifdef CONFIG_NXDN_CS7000
+static OpMode_NXDN nxdnMode;            // NXDN on CS7000-M17 Plus
 #endif
 #ifdef CONFIG_DMR_CS7000
 static OpMode_DMR dmrMode;              // DMR on CS7000-M17 Plus
@@ -165,6 +171,9 @@ void rtx_task()
                 #endif
                 #ifdef CONFIG_YSF_CS7000
                 case OPMODE_YSF:  currMode = &ysfMode; break;
+                #endif
+                #ifdef CONFIG_NXDN_CS7000
+                case OPMODE_NXDN: currMode = &nxdnMode; break;
                 #endif
                 #ifdef CONFIG_DMR_CS7000
                 case OPMODE_DMR:  currMode = &dmrMode; break;

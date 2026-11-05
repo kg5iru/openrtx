@@ -81,6 +81,11 @@ typedef struct
 #if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
     uint8_t ysf_txVw;             // 1 = YSF voice full rate (VW), 0 = DN
 #endif
+#ifdef CONFIG_NXDN_CS7000
+    uint8_t nxdn_ran;             // NXDN RAN, 0 = any (sent as 0), 1..63
+    uint16_t nxdn_id;             // Own NXDN unit ID, 0 = not set (no TX)
+    uint16_t nxdn_tg;             // NXDN talkgroup called, 0 = not set (10)
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -162,6 +167,11 @@ static const settings_t default_settings =
 #if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
     0,                            // YSF DN (V/D mode 2)
 #endif
+#ifdef CONFIG_NXDN_CS7000
+    0,                            // Any NXDN RAN
+    0,                            // NXDN ID not set
+    0,                            // NXDN talkgroup not set
+#endif
 };
 
 #ifdef CONFIG_DMR_CS7000
@@ -239,6 +249,34 @@ static inline uint8_t settings_dmrTimeslot(const settings_t *s)
 static inline uint8_t settings_ysfDgid(uint8_t value)
 {
     return (value > YSF_DGID_MAX) ? 0 : value;
+}
+#endif
+
+#ifdef CONFIG_NXDN_CS7000
+/*
+ * NXDN fields, after the others: settings saved by an older build read them
+ * back as zeroes or as erased flash (0xFF), so out of range values mean not
+ * set.  Unit and group IDs are 16 bits, 1..65519 (above are reserved).
+ */
+#define NXDN_RAN_MAX 63
+#define NXDN_ID_MAX 65519
+#define NXDN_TG_DEFAULT 10
+
+static inline uint8_t settings_nxdnRan(const settings_t *s)
+{
+    return (s->nxdn_ran > NXDN_RAN_MAX) ? 0 : s->nxdn_ran;
+}
+
+static inline uint16_t settings_nxdnId(const settings_t *s)
+{
+    return (s->nxdn_id > NXDN_ID_MAX) ? 0 : s->nxdn_id;
+}
+
+static inline uint16_t settings_nxdnTg(const settings_t *s)
+{
+    if ((s->nxdn_tg == 0) || (s->nxdn_tg > NXDN_ID_MAX))
+        return NXDN_TG_DEFAULT;
+    return s->nxdn_tg;
 }
 #endif
 

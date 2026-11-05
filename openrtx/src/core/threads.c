@@ -126,6 +126,11 @@ void *ui_threadFunc(void *arg)
             #if defined(CONFIG_YSF_CS7000) && defined(CONFIG_P25)
             rtx_cfg.ysfTxVw = (state.settings.ysf_txVw == 1);
             #endif
+            #ifdef CONFIG_NXDN_CS7000
+            rtx_cfg.nxdnRan = settings_nxdnRan(&state.settings);
+            rtx_cfg.nxdnId  = settings_nxdnId(&state.settings);
+            rtx_cfg.nxdnTg  = settings_nxdnTg(&state.settings);
+            #endif
 
             pthread_mutex_unlock(&rtx_mutex);
 
