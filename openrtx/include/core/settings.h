@@ -56,6 +56,7 @@ typedef struct
     uint32_t dmr_rxTg;            // DMR talkgroup to receive, 0 = all
     uint8_t dmr_ts;               // DMR timeslot to receive, 0 = any, 1 or 2
     uint32_t dmr_id;              // Own DMR radio ID, 0 = not set (no TX)
+    uint8_t dmr_micGain;          // DMR mic gain step + 1, 0 = not set (0 dB)
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -90,6 +91,7 @@ static const settings_t default_settings =
     0,                            // Receive all DMR talkgroups
     0,                            // Receive either DMR timeslot
     0,                            // DMR radio ID not set
+    0,                            // DMR mic gain not set (0 dB)
 #endif
 };
 
@@ -107,6 +109,24 @@ static inline uint8_t settings_dmrColourCode(const settings_t *s)
 static inline void settings_setDmrColourCode(settings_t *s, uint8_t cc)
 {
     s->dmr_cc = (cc & 0x0F) + 1;
+}
+
+/*
+ * DMR microphone gain, in 3 dB steps from -12 dB (step 0) to +12 dB (step
+ * 8); stored plus one, zero (older settings) meaning 0 dB.
+ */
+#define DMR_MIC_GAIN_STEPS 9
+
+static inline uint8_t settings_dmrMicGainStep(const settings_t *s)
+{
+    if ((s->dmr_micGain == 0) || (s->dmr_micGain > DMR_MIC_GAIN_STEPS))
+        return 4;
+    return s->dmr_micGain - 1;
+}
+
+static inline void settings_setDmrMicGainStep(settings_t *s, uint8_t step)
+{
+    s->dmr_micGain = (step % DMR_MIC_GAIN_STEPS) + 1;
 }
 
 // DMR timeslot filter: 0 = either timeslot, 1 = TS1, 2 = TS2

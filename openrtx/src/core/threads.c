@@ -100,6 +100,7 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.dmrRxTalkgroup = state.settings.dmr_rxTg;
             rtx_cfg.dmrTimeslot    = settings_dmrTimeslot(&state.settings);
             rtx_cfg.dmrRadioId     = state.settings.dmr_id;
+            rtx_cfg.dmrMicGain     = settings_dmrMicGainStep(&state.settings);
             #endif
 
             pthread_mutex_unlock(&rtx_mutex);
