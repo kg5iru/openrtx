@@ -104,6 +104,10 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.dmrPrivateId   = state.settings.dmr_privId;
             rtx_cfg.dmrTalkerAlias = (state.settings.dmr_taOff == 0);
             rtx_cfg.dmrMonitor     = settings_dmrMonitor(&state.settings);
+            rtx_cfg.dmrAprsId      = state.settings.dmr_aprsId;
+            rtx_cfg.dmrAprsPtt     = (state.settings.dmr_aprsPtt != 0);
+            rtx_cfg.dmrAprsInterval =
+                settings_dmrAprsIntervalSec(state.settings.dmr_aprsInterval);
             #endif
 
             pthread_mutex_unlock(&rtx_mutex);

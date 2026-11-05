@@ -60,6 +60,9 @@ typedef struct
     uint32_t dmr_privId;          // DMR private call target, 0 = group calls
     uint8_t dmr_taOff;            // 1 = don't send the DMR talker alias
     uint8_t dmr_monitor;          // DMR monitor: 0 off, 1 own TS, 2 any TS
+    uint32_t dmr_aprsId;          // DMR GPS/APRS destination, 0 = off
+    uint8_t dmr_aprsPtt;          // 1 = send the position after each TX
+    uint8_t dmr_aprsInterval;     // DMR APRS beacon interval index, 0 = off
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -98,6 +101,9 @@ static const settings_t default_settings =
     0,                            // DMR group calls
     0,                            // Send the DMR talker alias
     0,                            // DMR monitor off
+    0,                            // DMR APRS off
+    0,                            // No DMR APRS after TX
+    0,                            // No DMR APRS beacon
 #endif
 };
 
@@ -143,6 +149,19 @@ static inline void settings_setDmrMicGainStep(settings_t *s, uint8_t step)
 static inline uint8_t settings_dmrMonitor(const settings_t *s)
 {
     return (s->dmr_monitor > 2) ? 0 : s->dmr_monitor;
+}
+
+/*
+ * DMR GPS position (digital APRS) beacon interval: index 0 = off, then 1, 2,
+ * 5, 10 and 30 minutes.
+ */
+#define DMR_APRS_INTERVALS 6
+
+static inline uint16_t settings_dmrAprsIntervalSec(uint8_t index)
+{
+    static const uint16_t sec[DMR_APRS_INTERVALS] = { 0, 60, 120, 300, 600,
+                                                      1800 };
+    return (index < DMR_APRS_INTERVALS) ? sec[index] : 0;
 }
 
 // DMR timeslot filter: 0 = either timeslot, 1 = TS1, 2 = TS2

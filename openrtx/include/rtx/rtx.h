@@ -62,6 +62,9 @@ typedef struct
     uint32_t dmrPrivateId;             /**< DMR private call ID, 0 = TG */
     bool     dmrTalkerAlias;           /**< DMR: send callsign as alias */
     uint8_t  dmrMonitor;               /**< DMR monitor: 0, 1 TS, 2 any */
+    uint32_t dmrAprsId;                /**< DMR APRS destination, 0 off */
+    bool     dmrAprsPtt;               /**< DMR APRS after each TX      */
+    uint16_t dmrAprsInterval;          /**< DMR APRS beacon, s, 0 off   */
 #endif
 }
 rtxStatus_t;
