@@ -175,6 +175,11 @@ static volatile uint8_t rxTimeslot = 0;
 static volatile bool slotMuted = false;
 static uint8_t callSlot = 0;
 static uint32_t slotDisagree = 0;
+// Sync kind of the call (see burstSyncKind)
+enum : uint8_t { SYNC_UNKNOWN = 0, SYNC_BS, SYNC_MS };
+static uint8_t callSync = SYNC_UNKNOWN;
+static uint8_t syncTries = 0; // voice bursts looked at for the sync kind
+static uint8_t syncRaw[2][6]; // windows of the last burst looked at
 
 static inline bool callMuted()
 {
@@ -201,6 +206,8 @@ static void endCall(const char *why)
     slotMuted = false;
     callSlot = 0;
     slotDisagree = 0;
+    callSync = SYNC_UNKNOWN;
+    syncTries = 0;
     voicePathOn = false;
     termSeen = false;
 }
@@ -209,6 +216,40 @@ static void endCall(const char *why)
  * Timeslot of the voice burst just received, 1 or 2, from the CACH TC bit
  * (reg 0x52 bit 2); 0 when the chip is not in the mode that decodes it.
  */
+/*
+ * Direct mode has no timeslots: a call from a radio in direct mode (MS
+ * sourced sync) carries no CACH, and the TC bit read from reg 0x52 means
+ * nothing (v46 on air: an HT in direct mode was taken as TS1 and muted with
+ * TS2 set, and the bit disagreed with itself on a quarter of the bursts).
+ * The kind of sync is read from the RX RAM burst windows, where voice frame
+ * A has its sync word at the start (v36 dumps: 75 5F D7 DF 75 F7, the BS
+ * voice sync, at 0x30 or 0x60).  The first byte of a RAM read is sometimes
+ * stale, so bytes 1..5 are compared.
+ */
+
+static uint8_t burstSyncKind()
+{
+    static const uint8_t bsVoice[5] = { 0x5F, 0xD7, 0xDF, 0x75, 0xF7 };
+    static const uint8_t msVoice[5] = { 0x7D, 0x5D, 0xD5, 0x7D, 0xFD };
+    static const uint8_t windows[2] = { 0x30, 0x60 };
+
+    for (int w = 0; w < 2; w++) {
+        C6000.readRxBurst(windows[w], syncRaw[w], 6);
+        bool bs = true, ms = true;
+        for (int i = 0; i < 5; i++) {
+            if (syncRaw[w][1 + i] != bsVoice[i])
+                bs = false;
+            if (syncRaw[w][1 + i] != msVoice[i])
+                ms = false;
+        }
+        if (bs)
+            return SYNC_BS;
+        if (ms)
+            return SYNC_MS;
+    }
+    return SYNC_UNKNOWN;
+}
+
 static uint8_t burstSlot()
 {
     if (rxTimeslot == 0)
@@ -258,20 +299,49 @@ static void pollVoicePort()
               tgMuted ? ", muted (talkgroup unknown)" : "");
     }
 
+    /*
+     * Timeslot filter.  The slot is taken from the TC bit of the first
+     * voice burst, but applied only once the call is known to come through
+     * a repeater (BS sync); until then (frame A carries the sync, so at
+     * most 6 bursts) its voice is held back.  A direct mode call is never
+     * muted for its slot.  If no sync was recognised in 7 bursts, the TC
+     * bit decides as before and the windows are logged.
+     */
     uint8_t slot = burstSlot();
-    if (slot != 0) {
-        if (callSlot == 0) {
-            callSlot = slot;
-            slotMuted = (slot != rxTimeslot);
-            LOG_I("dmr", "call on TS%u%s", slot, slotMuted ? " (muted)" : "");
-        } else if (slot != callSlot) {
-            slotDisagree++;
+    if ((slot != 0) && (callSlot == 0))
+        callSlot = slot;
+    else if ((slot != 0) && (slot != callSlot))
+        slotDisagree++;
+
+    bool slotPending = false;
+    if ((rxTimeslot != 0) && (callSync == SYNC_UNKNOWN)) {
+        callSync = burstSyncKind();
+        syncTries++;
+        if (callSync == SYNC_BS) {
+            slotMuted = (callSlot != rxTimeslot);
+            LOG_I("dmr", "call on TS%u%s", callSlot,
+                  slotMuted ? " (muted)" : "");
+        } else if (callSync == SYNC_MS) {
+            slotMuted = false;
+            callSlot = 0;
+            LOG_I("dmr", "call in direct mode: no timeslot filter");
+        } else if (syncTries >= 7) {
+            callSync = SYNC_BS;
+            slotMuted = (callSlot != rxTimeslot);
+            LOG_W("dmr", "call sync not recognised, taken as TS%u%s", callSlot,
+                  slotMuted ? " (muted)" : "");
+            LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x30", syncRaw[0], 6);
+            LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x60", syncRaw[1], 6);
+        } else {
+            slotPending = true;
         }
     }
+    if (callSync == SYNC_MS)
+        callSlot = 0;
 
     slotsSinceVoice = 0;
     termSeen = false;
-    if (callMuted()) {
+    if (callMuted() || slotPending) {
         callBursts++;
         return;
     }
@@ -663,6 +733,8 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
             callSlot = 0;
             slotMuted = false;
             slotDisagree = 0;
+            callSync = SYNC_UNKNOWN;
+            syncTries = 0;
         }
         callActive = true;
         slotsSinceVoice = 0;
