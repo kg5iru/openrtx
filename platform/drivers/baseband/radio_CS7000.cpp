@@ -233,6 +233,7 @@ void radio_setOpmode(const enum opmode mode)
 
         case OPMODE_M17:
         case OPMODE_YSF:                // C4FM: the same baseband path as M17
+        case OPMODE_NXDN:               // 4FSK, likewise
             C6000.fmMode();             // HR_C5000 in FM mode
             C6000.setInputGain(+9);     // Input gain in dB, found experimentally
             C6000.setModFactor(0x25);
@@ -406,6 +407,7 @@ void radio_enableTx()
 
         case OPMODE_M17:
         case OPMODE_YSF:        // C4FM: the same baseband path as M17
+        case OPMODE_NXDN:       // 4FSK, likewise
             C6000.disableTones();
             C6000.startAnalogTx(TxAudioSource::LINE_IN, FmConfig::BW_25kHz);
             break;
@@ -427,7 +429,8 @@ void radio_enableTx()
     }
 
     analogTx = (config->opMode == OPMODE_FM) || (config->opMode == OPMODE_M17)
-            || (config->opMode == OPMODE_YSF);
+            || (config->opMode == OPMODE_YSF)
+            || (config->opMode == OPMODE_NXDN);
 #ifdef CONFIG_P25
     analogTx = analogTx || (config->opMode == OPMODE_P25);
 #endif

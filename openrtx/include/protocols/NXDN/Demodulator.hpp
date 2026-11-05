@@ -86,6 +86,16 @@ public:
         return mu;
     }
 
+    /**
+     * @return half the distance between the outer symbol levels, in
+     * baseband units: the received deviation.
+     */
+    int32_t outerLevel()
+    {
+        auto outer = devEstimator.outerDeviation();
+        return (outer.first - outer.second) / 2;
+    }
+
     /** @return bit errors in the sync word of the last frame. */
     uint8_t lastSyncErrors() const
     {

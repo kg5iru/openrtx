@@ -643,9 +643,11 @@ if get_option('cs7000_ambe')
                   'platform/drivers/baseband/OpMode_DMR_CS7000.cpp',
                   'platform/drivers/baseband/OpMode_YSF_CS7000.cpp',
                   'openrtx/src/protocols/YSF/Modulator.cpp'] + ysf_src
+  cs7000p_src += ['platform/drivers/baseband/OpMode_NXDN_CS7000.cpp',
+                  'openrtx/src/protocols/NXDN/Modulator.cpp'] + nxdn_src
   cs7000p_inc += ['platform/drivers/vocoder', 'platform/drivers/baseband']
   cs7000p_def += {'CS7000_AMBE': '', 'CONFIG_DMR_CS7000': '',
-                  'CONFIG_YSF_CS7000': ''}
+                  'CONFIG_YSF_CS7000': '', 'CONFIG_NXDN_CS7000': ''}
   if get_option('cs7000_ambe_stock')
     cs7000p_def += {'CS7000_AMBE_STOCK': ''}
   endif
