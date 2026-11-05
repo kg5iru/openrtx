@@ -39,6 +39,7 @@ private:
     void startWakeup(rtxStatus_t *const status);
     void updateWakeup(rtxStatus_t *const status, const bool ptt,
                       const bool bsLocked);
+    bool startData(rtxStatus_t *const status);
 
     bool enterRx;
     bool audioOn;
@@ -56,6 +57,11 @@ private:
     long long wakeStart; ///< getTick() at the first wake-up
     uint32_t replyId;    ///< Source of the last private call to this radio
     long long replyTime; ///< getTick() when that call was last received
+    bool txIsData;       ///< The transmission is a GPS position
+    bool wakeForData;    ///< The wake-up is for a GPS position
+    bool aprsPending;    ///< A GPS position is to be sent when idle
+    long long aprsLast;  ///< getTick() of the last beacon interval start
+    uint16_t aprsIpId;   ///< IPv4 identification of the next position
 };
 
 #endif /* OPMODE_DMR_CS7000_H */

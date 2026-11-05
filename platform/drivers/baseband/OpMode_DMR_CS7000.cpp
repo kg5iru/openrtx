@@ -10,6 +10,7 @@
 #include "interfaces/delays.h"
 #include "core/audio_path.h"
 #include "core/log.h"
+#include "core/state.h"
 #include "drivers/baseband/dmr_CS7000.h"
 #include "drivers/baseband/dmr_audio_CS7000.h"
 #include "drivers/baseband/dmr_diag_CS7000.h"
@@ -29,6 +30,63 @@ static constexpr uint32_t DEFAULT_TX_TG = 9;
  * the caller with a private call, as DMR radios do (call hang time).
  */
 static constexpr long long PRIVATE_REPLY_MS = 5000;
+
+/*
+ * GPS position (digital APRS) packet, as the owner's Anytone sends it (v55
+ * off-air capture): a compressed UDP/IPv4 header (IPv4 identification, no
+ * address or port IDs, then source and destination port 10110), then an
+ * NMEA RMC sentence.  BrandMeister forwards it to APRS-IS when the user's
+ * profile has APRS enabled.  Returns 0 without a GPS fix.
+ */
+static size_t buildPosition(uint8_t *out, size_t max, uint16_t ipId)
+{
+    const gps_t *g = &state.gps_data;
+    if ((g->fix_quality == 0) || (max < 96))
+        return 0;
+
+    out[0] = ipId >> 8;
+    out[1] = ipId & 0xFF;
+    out[2] = 0x00;
+    out[3] = 0x00;
+    out[4] = 0x00;
+    out[5] = 0x27; // UDP port 10110
+    out[6] = 0x7E;
+    out[7] = 0x27;
+    out[8] = 0x7E;
+
+    // Coordinates are in millionths of a degree: ddmm.mmmmm, the minutes
+    // times 1e5 being the fraction of a degree times 6
+    uint32_t lat = (g->latitude < 0) ? -g->latitude : g->latitude;
+    uint32_t lon = (g->longitude < 0) ? -g->longitude : g->longitude;
+    uint32_t latMin = (lat % 1000000) * 6;
+    uint32_t lonMin = (lon % 1000000) * 6;
+    uint32_t knots100 = ((uint32_t)g->speed * 100000u) / 1852u;
+    int course = g->tmg_true;
+    if ((course < 0) || (course > 359))
+        course = 0;
+
+    char *s = (char *)&out[9];
+    size_t room = max - 9 - 6; // room for the checksum and CR LF
+    int n = snprintf(
+        s, room,
+        "$GPRMC,%02d%02d%02d.000,A,%02lu%02lu.%05lu,%c,"
+        "%03lu%02lu.%05lu,%c,%lu.%02lu,%d.00,%02d%02d%02d,,,A",
+        g->timestamp.hour, g->timestamp.minute, g->timestamp.second,
+        (unsigned long)(lat / 1000000), (unsigned long)(latMin / 100000),
+        (unsigned long)(latMin % 100000), (g->latitude < 0) ? 'S' : 'N',
+        (unsigned long)(lon / 1000000), (unsigned long)(lonMin / 100000),
+        (unsigned long)(lonMin % 100000), (g->longitude < 0) ? 'W' : 'E',
+        (unsigned long)(knots100 / 100), (unsigned long)(knots100 % 100),
+        course, g->timestamp.date, g->timestamp.month, g->timestamp.year);
+    if ((n <= 0) || ((size_t)n >= room))
+        return 0;
+
+    uint8_t cs = 0;
+    for (int i = 1; i < n; i++)
+        cs ^= (uint8_t)s[i];
+    n += snprintf(&s[n], 6, "*%02X\r\n", cs);
+    return 9 + (size_t)n;
+}
 
 /*
  * Repeater (duplex hotspot) wake-up, with a timeslot set.  v48 on air: the
@@ -60,6 +118,11 @@ OpMode_DMR::OpMode_DMR()
     , wakeStart(0)
     , replyId(0)
     , replyTime(0)
+    , txIsData(false)
+    , wakeForData(false)
+    , aprsPending(false)
+    , aprsLast(0)
+    , aprsIpId(1)
 {
 }
 
@@ -74,6 +137,8 @@ void OpMode_DMR::enable()
     transmitting = false;
     pttHeld = false;
     wakePhase = WAKE_NONE;
+    aprsPending = false;
+    aprsLast = getTick();
 }
 
 void OpMode_DMR::disable()
@@ -176,6 +241,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
                 LOG_I("dmr", "repeater ending a call: waking it up");
             wakeTries = 0;
             wakeStart = getTick();
+            wakeForData = false;
             startWakeup(status);
         } else {
             if (status->dmrTimeslot != 0)
@@ -184,10 +250,55 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         }
     }
 
+    /*
+     * GPS position (digital APRS): after each transmission and/or every
+     * interval, sent once the radio is idle (no transmission, wake-up, PTT
+     * or call being received).  Through a repeater, woken up first like a
+     * PTT press.
+     */
+    if ((status->dmrAprsId != 0) && (status->dmrAprsInterval != 0)
+        && ((getTick() - aprsLast) >= (status->dmrAprsInterval * 1000LL))) {
+        aprsLast = getTick();
+        aprsPending = true;
+    }
+    if (aprsPending && !transmitting && (wakePhase == WAKE_NONE) && !ptt
+        && !rxSquelchOpen() && (status->opStatus == RX)) {
+        aprsPending = false;
+        if ((status->dmrAprsId == 0) || (status->txDisable != 0)
+            || (status->dmrRadioId == 0)) {
+            // Not configured or not allowed: nothing to send
+        } else if (state.gps_data.fix_quality == 0) {
+            LOG_W("dmr", "APRS: no GPS fix, position not sent");
+        } else if ((status->dmrTimeslot != 0) && !bsLocked) {
+            wakeTries = 0;
+            wakeStart = getTick();
+            wakeForData = true;
+            startWakeup(status);
+        } else {
+            startData(status);
+        }
+    }
+
     if (wakePhase != WAKE_NONE)
         updateWakeup(status, ptt, bsLocked);
 
-    if (transmitting) {
+    if (transmitting && txIsData) {
+        // A position: about 15 bursts, out in under a second
+        txTicks++;
+        dmrDiag_inc(DIAG_BEAT);
+        if ((txTicks == 10) && dmr_txAligning()) {
+            LOG_W("dmr", "repeater slot not found in 300 ms: waking it up");
+            finishTx(status);
+            wakeTries = 0;
+            wakeStart = getTick();
+            wakeForData = true;
+            startWakeup(status);
+        } else if (dmr_txDone() || (txTicks >= 67)) {
+            if (!dmr_txDone())
+                LOG_W("dmr", "position not sent within 2 s: forced end");
+            finishTx(status);
+        }
+    } else if (transmitting) {
         txTicks++;
         dmrDiag_inc(DIAG_BEAT);
         if ((txTicks == 10) && (dmr_txSlotIrqs() == 0))
@@ -203,6 +314,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
             if (ptt) {
                 wakeTries = 0;
                 wakeStart = getTick();
+                wakeForData = false;
                 startWakeup(status);
             }
             sleepFor(0u, 30u);
@@ -311,6 +423,7 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
 
     status->opStatus = TX;
     transmitting = true;
+    txIsData = false;
     txTicks = 0;
     stopTick = 0;
     txStart = getTick();
@@ -332,6 +445,11 @@ void OpMode_DMR::finishTx(rtxStatus_t *const status)
     status->opStatus = RX;
     transmitting = false;
     platform_ledOff(RED);
+
+    // After a voice transmission, the position (APRS on PTT)
+    if (!txIsData && (status->dmrAprsId != 0) && status->dmrAprsPtt)
+        aprsPending = true;
+    txIsData = false;
 }
 
 void OpMode_DMR::startWakeup(rtxStatus_t *const status)
@@ -368,7 +486,7 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt,
     }
 
     // Waiting for the repeater
-    if (!ptt) {
+    if (!ptt && !wakeForData) {
         LOG_I("dmr", "PTT released while waking the repeater");
         wakePhase = WAKE_NONE;
         return;
@@ -378,7 +496,10 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt,
         LOG_I("dmr", "repeater answered %lu ms after the first wake-up (%u)",
               (unsigned long)(getTick() - wakeStart), wakeTries);
         wakePhase = WAKE_NONE;
-        startTx(status);
+        if (wakeForData)
+            startData(status);
+        else
+            startTx(status);
         return;
     }
 
@@ -391,6 +512,57 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt,
             wakePhase = WAKE_NONE;
         }
     }
+}
+
+bool OpMode_DMR::startData(rtxStatus_t *const status)
+{
+    uint8_t msg[100];
+    size_t len = buildPosition(msg, sizeof(msg), aprsIpId);
+    if (len == 0) {
+        LOG_W("dmr", "APRS: no GPS fix, position not sent");
+        return false;
+    }
+
+    dmrDiag_startWatchdog();
+    dmrDiag_txStart();
+    stopRxAudio();
+
+    bool ok;
+    if (status->dmrTimeslot != 0) {
+        ok = dmr_startData(status->dmrRadioId, status->dmrAprsId,
+                           status->dmrTimeslot, true, msg, len);
+        if (ok) {
+            radio_disableRtx();
+            radio_enableTx();
+        }
+    } else {
+        radio_disableRtx();
+        radio_enableTx();
+        ok = dmr_startData(status->dmrRadioId, status->dmrAprsId, 0, true, msg,
+                           len);
+        if (!ok) {
+            radio_disableRtx();
+            radio_enableRx();
+        }
+    }
+    if (!ok) {
+        LOG_W("dmr", "APRS: position too long (%u bytes)", (unsigned)len);
+        dmrDiag_txEnd();
+        return false;
+    }
+
+    LOG_I("dmr", "APRS: position %u to %lu", aprsIpId,
+          (unsigned long)status->dmrAprsId);
+    aprsIpId++;
+    micPath = -1;
+    status->opStatus = TX;
+    transmitting = true;
+    txIsData = true;
+    txTicks = 0;
+    stopTick = 0;
+    txStart = getTick();
+    platform_ledOn(RED);
+    return true;
 }
 
 bool OpMode_DMR::rxSquelchOpen()
