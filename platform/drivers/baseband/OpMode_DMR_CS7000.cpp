@@ -109,6 +109,7 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     dmr_setRxTalkgroup(status->dmrRxTalkgroup);
     dmr_setRxTimeslot(status->dmrTimeslot);
     dmr_setOwnId(status->dmrRadioId);
+    dmr_setMonitor(status->dmrMonitor);
 
     // Private call to this radio: remember the caller for a reply
     dmrCallInfo_t call;

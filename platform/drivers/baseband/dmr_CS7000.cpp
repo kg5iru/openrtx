@@ -178,6 +178,9 @@ static uint32_t callDropped = 0;
  */
 static volatile uint32_t rxTalkgroup = 0;
 static volatile uint32_t ownId = 0; // private calls to other IDs are muted
+// Digital monitor: 1 lifts the talkgroup and private call filters, 2 the
+// timeslot filter too
+static volatile uint8_t monitor = 0;
 
 /*
  * Talker alias (ETSI TS 102 361-2, 7.2.18), received in the embedded
@@ -344,7 +347,7 @@ static void pollVoicePort()
     // talkgroup filter set, its talkgroup is unknown: muted until a header.
     if (!callActive) {
         callActive = true;
-        tgMuted = (rxTalkgroup != 0);
+        tgMuted = (rxTalkgroup != 0) && (monitor == 0);
         callBursts = 0;
         callDropped = 0;
         LOG_I("dmr", "call start: late entry%s",
@@ -366,11 +369,19 @@ static void pollVoicePort()
         slotDisagree++;
 
     bool slotPending = false;
-    if ((rxTimeslot != 0) && (callSync == SYNC_UNKNOWN)) {
+    bool slotFilter = (monitor != 2);
+    if ((rxTimeslot == 0) && (callSync == SYNC_UNKNOWN) && (syncTries < 7)) {
+        // No timeslot set: the sync kind only tells the screen whether the
+        // call is in direct mode; the voice is not held back for it
+        callSync = burstSyncKind();
+        syncTries++;
+        if (callSync == SYNC_MS)
+            LOG_I("dmr", "call in direct mode");
+    } else if ((rxTimeslot != 0) && (callSync == SYNC_UNKNOWN)) {
         callSync = burstSyncKind();
         syncTries++;
         if (callSync == SYNC_BS) {
-            slotMuted = (callSlot != rxTimeslot);
+            slotMuted = slotFilter && (callSlot != rxTimeslot);
             LOG_I("dmr", "call on TS%u%s", callSlot,
                   slotMuted ? " (muted)" : "");
         } else if (callSync == SYNC_MS) {
@@ -379,7 +390,7 @@ static void pollVoicePort()
             LOG_I("dmr", "call in direct mode: no timeslot filter");
         } else if (syncTries >= 7) {
             callSync = SYNC_BS;
-            slotMuted = (callSlot != rxTimeslot);
+            slotMuted = slotFilter && (callSlot != rxTimeslot);
             LOG_W("dmr", "call sync not recognised, taken as TS%u%s", callSlot,
                   slotMuted ? " (muted)" : "");
             LOG_HEX(LOG_LVL_WARN, "dmr", "rx ram 0x30", syncRaw[0],
@@ -996,8 +1007,9 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         // radio are muted
         uint32_t tg = rxTalkgroup;
         uint32_t own = ownId;
-        tgMuted = ((flco == 0) && (tg != 0) && (dst != tg))
-               || ((flco == 3) && (own != 0) && (dst != own));
+        tgMuted = (monitor == 0)
+               && (((flco == 0) && (tg != 0) && (dst != tg))
+                   || ((flco == 3) && (own != 0) && (dst != own)));
         if (newSource) {
             taHave = 0;
             taLogged = false;
@@ -1456,6 +1468,11 @@ void dmr_setOwnId(uint32_t id)
     ownId = id;
 }
 
+void dmr_setMonitor(uint8_t mode)
+{
+    monitor = (mode > 2) ? 0 : mode;
+}
+
 void dmr_setRxTimeslot(uint8_t ts)
 {
     rxTimeslot = (ts > 2) ? 0 : ts;
@@ -1467,6 +1484,7 @@ bool dmr_getCallInfo(dmrCallInfo_t *out)
         return false;
     *out = callInfo;
     out->slot = callSlot;
+    out->direct = (callSync == SYNC_MS);
     for (size_t i = 0; i < sizeof(out->alias); i++) {
         out->alias[i] = rxAlias[i];
         if (rxAlias[i] == '\0')

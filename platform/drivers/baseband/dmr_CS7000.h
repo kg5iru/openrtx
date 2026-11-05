@@ -34,6 +34,7 @@ typedef struct {
     uint32_t src;   ///< source radio ID
     uint8_t slot;   ///< timeslot, 1 or 2; 0 when unknown (no timeslot set)
     char alias[32]; ///< talker alias of the source, "" until received
+    bool direct;    ///< direct mode (simplex) call: no timeslot
 } dmrCallInfo_t;
 
 /** Returns false when no call is being received. */
@@ -50,6 +51,12 @@ void dmr_setRxTalkgroup(uint32_t tg);
  * receives every private call.
  */
 void dmr_setOwnId(uint32_t id);
+
+/**
+ * Digital monitor: 0 = off, 1 = every call on the timeslot set (talkgroup
+ * and private call filters lifted), 2 = every call on either timeslot.
+ */
+void dmr_setMonitor(uint8_t mode);
 
 /**
  * Timeslot to receive, 1 or 2: calls on the other slot are muted and not
