@@ -249,6 +249,7 @@ void radio_setOpmode(const enum opmode mode)
             C6000.dmrMode();
 #ifdef CONFIG_DMR_CS7000
             dmrSlotMode = 0x6A;         // As dmrMode() leaves it
+            dmr_setSlotModeReg(0x6A);
 #endif
 #endif
             break;
@@ -502,6 +503,7 @@ void radio_updateConfiguration()
             C6000.writeCfgRegister(0x41, 0x40);
             C6000.writeCfgRegister(0x40, 0x43);
             dmrSlotMode = mode;
+            dmr_setSlotModeReg(mode);
         }
     }
 #endif

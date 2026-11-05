@@ -61,6 +61,12 @@ void dmr_setRxTimeslot(uint8_t ts);
  */
 void dmr_startTx(uint32_t src, uint32_t dst);
 
+/**
+ * Tell the driver the value written to reg 0x10 (layer 2 mode / timeslot),
+ * to put back after a transmission, which runs in non-relay mode.
+ */
+void dmr_setSlotModeReg(uint8_t value);
+
 /** @return slot interrupts seen while receiving, since dmr_init(). */
 uint32_t dmr_rxSlotIrqs();
 

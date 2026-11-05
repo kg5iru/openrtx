@@ -403,9 +403,10 @@ static volatile uint8_t txState = TX_OFF;
 static volatile bool txStopReq = false;
 static uint8_t txLc[9];
 static bool txArmSlot = false; // this slot interrupt arms a burst
-// Registers changed for the transmission, restored afterwards
-static uint8_t txSaved10 = 0;
-static uint8_t txSaved56 = 0;
+// Reg 0x10 as last written by radio_CS7000.cpp, put back after a
+// transmission: reading it back does not give the written value (v45 read
+// 0x80 for 0x6A, 0xEC for 0x6D)
+static uint8_t slotModeReg = 0x6A;
 // Slot interrupts while receiving, since the last TX start: tells whether
 // the chip's slot timer was running when the PTT was pressed
 static volatile uint32_t rxSlotIrqs = 0;
@@ -843,10 +844,8 @@ void dmr_startTx(uint32_t src, uint32_t dst)
      * is put back afterwards.  Reg 0x56 bit 4: voice from TX RAM 0x30 (see
      * loadVoice).
      */
-    txSaved10 = C6000.readCfgRegister(0x10);
-    txSaved56 = C6000.readCfgRegister(0x56);
     C6000.writeCfgRegister(0x10, 0x6A);
-    C6000.writeCfgRegister(0x56, txSaved56 | 0x10);
+    C6000.writeCfgRegister(0x56, 0x10); // 0x00 otherwise (HR_C6000 init)
     C6000.writeCfgRegister(0x40, 0xA3);
 
     LOG_I("dmr",
@@ -912,8 +911,8 @@ void dmr_endTx(uint32_t elapsedMs)
     // with the steps dmrMode() starts it with
     C6000.writeCfgRegister(0x41, 0x00);
     C6000.writeCfgRegister(0x40, 0x03);
-    C6000.writeCfgRegister(0x56, txSaved56);
-    C6000.writeCfgRegister(0x10, txSaved10);
+    C6000.writeCfgRegister(0x56, 0x00);
+    C6000.writeCfgRegister(0x10, slotModeReg);
     C6000.writeCfgRegister(0x41, 0x20);
     C6000.writeCfgRegister(0x41, 0x00);
     C6000.writeCfgRegister(0x41, 0x40);
@@ -927,12 +926,16 @@ void dmr_endTx(uint32_t elapsedMs)
     LOG_I("dmr", "tx: %lu ms, %lu slot interrupts, %lu TX interrupts",
           (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
           (unsigned long)txTxIrqs);
-    LOG_I("dmr", "tx: regs 0x10 %02x, 0x56 %02x restored", txSaved10,
-          txSaved56);
+    LOG_I("dmr", "tx: reg 0x10 back to %02x", slotModeReg);
     if (txBursts >= 1)
         LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 0", txFirstBursts[0], 27);
     if (txBursts >= 2)
         LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 1", txFirstBursts[1], 27);
+}
+
+void dmr_setSlotModeReg(uint8_t value)
+{
+    slotModeReg = value;
 }
 
 void dmr_setRxTalkgroup(uint32_t tg)
