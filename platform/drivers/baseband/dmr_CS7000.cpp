@@ -177,6 +177,20 @@ static uint32_t callDropped = 0;
  * header was missed (late entry: its talkgroup is unknown).
  */
 static volatile uint32_t rxTalkgroup = 0;
+static volatile uint32_t ownId = 0; // private calls to other IDs are muted
+
+/*
+ * Talker alias (ETSI TS 102 361-2, 7.2.18), received in the embedded
+ * signalling as link controls with FLCO 4 (header) and 5..7 (blocks 1..3).
+ * The chip puts an embedded LC that passed its checksum in RX RAM 0x00 like
+ * the other LCs, with reg 0x51 bit 2 clear (as OpenGD77 reads it).  Each
+ * carries 7 bytes after FLCO and FID; the header's first byte holds the
+ * format (2 bits), the length in characters (5 bits) and one data bit.
+ */
+static uint8_t taData[4][7];
+static uint8_t taHave = 0; // blocks received for the current call
+static bool taLogged = false;
+static char rxAlias[32];   // "" until complete
 static volatile bool tgMuted = false;
 
 /*
@@ -228,6 +242,9 @@ static void endCall(const char *why)
     syncTries = 0;
     voicePathOn = false;
     termSeen = false;
+    taHave = 0;
+    taLogged = false;
+    rxAlias[0] = '\0';
 }
 
 /*
@@ -519,7 +536,17 @@ static const uint8_t ambeSilence[9] = { 0xB9, 0xE8, 0x81, 0x52, 0x61,
 static volatile uint8_t txState = TX_OFF;
 static volatile bool txStopReq = false;
 static uint8_t txLc[9];
-static bool txArmSlot = false; // this slot interrupt arms a burst
+/*
+ * Talker alias sent in the embedded signalling (as OpenGD77 does): every
+ * other superframe carries one alias block instead of the call's link
+ * control, the blocks in turn.  ISO 8-bit format: the header (FLCO 4) holds
+ * the format, the length and 6 characters, blocks 1..3 (FLCO 5..7) 7 each.
+ */
+static uint8_t txTa[4][9];
+static uint8_t txTaBlocks = 0;       // 0 = no alias
+static uint8_t txSuperframe = 0;     // superframes started
+static const uint8_t *txSfLc = txLc; // embedded LC of this superframe
+static bool txArmSlot = false;       // this slot interrupt arms a burst
 // Reg 0x10 as last written by radio_CS7000.cpp, put back after a
 // transmission: reading it back does not give the written value (v45 read
 // 0x80 for 0x6A, 0xEC for 0x6D)
@@ -705,9 +732,17 @@ static void handleTxSlot()
             }
 
             dmrDiag_set(DIAG_STAGE, STAGE_VOICE);
+            if (txVoiceN == 0) {
+                // Burst A: the link control the superframe embeds
+                if ((txTaBlocks != 0) && ((txSuperframe & 1) != 0))
+                    txSfLc = txTa[(txSuperframe / 2) % txTaBlocks];
+                else
+                    txSfLc = txLc;
+                txSuperframe++;
+            }
             C6000.writeCfgRegister(0x41, 0x80);
             loadVoice();
-            C6000.writeTxBurst(0x00, txLc, sizeof(txLc));
+            C6000.writeTxBurst(0x00, txSfLc, sizeof(txLc));
             C6000.writeCfgRegister(0x50, (uint8_t)((txVoiceN << 4) | 0x08));
             txVoiceN = (txVoiceN + 1) % 6;
             txBursts++;
@@ -850,6 +885,57 @@ static bool rs129Match(const uint8_t *lc, const uint8_t par[3], uint8_t mask)
 static uint8_t lcImage[12];
 static bool lcHave = false;
 
+static void decodeAlias()
+{
+    if ((taHave & 1) == 0)
+        return;
+
+    uint8_t format = taData[0][0] >> 6;
+    uint8_t len = (taData[0][0] >> 1) & 0x1F;
+    if (len > (sizeof(rxAlias) - 1))
+        len = sizeof(rxAlias) - 1;
+
+    // Characters per block: 7-bit format 7 (header) then 8; 8-bit
+    // formats 6 then 7.  UTF-16 is not decoded.
+    unsigned per0 = (format == 0) ? 7 : 6;
+    unsigned per = (format == 0) ? 8 : 7;
+    unsigned blocks = 1;
+    if (len > per0)
+        blocks += (len - per0 + per - 1) / per;
+    if ((format == 3) || (blocks > 4))
+        return;
+    for (unsigned b = 0; b < blocks; b++)
+        if ((taHave & (1u << b)) == 0)
+            return;
+
+    char text[32];
+    for (unsigned i = 0; i < len; i++) {
+        unsigned c;
+        if (format == 0) {
+            // 7-bit: a bit stream starting at the header's last bit
+            unsigned bit = 7 + (7 * i); // header: bit 7 is its data bit
+            c = 0;
+            for (int k = 0; k < 7; k++, bit++) {
+                unsigned blk = (bit < 56) ? 0 : 1 + ((bit - 56) / 56);
+                unsigned off = (bit < 56) ? bit : (bit - 56) % 56;
+                c = (c << 1) | ((taData[blk][off / 8] >> (7 - (off % 8))) & 1);
+            }
+        } else {
+            unsigned blk = (i < 6) ? 0 : 1 + ((i - 6) / 7);
+            unsigned off = (i < 6) ? (1 + i) : ((i - 6) % 7);
+            c = taData[blk][off];
+        }
+        text[i] = ((c >= 0x20) && (c < 0x7F)) ? (char)c : '?';
+    }
+    text[len] = '\0';
+    // Trailing spaces are padding
+    while ((len > 0) && (text[len - 1] == ' '))
+        text[--len] = '\0';
+
+    for (unsigned i = 0; i <= len; i++)
+        rxAlias[i] = text[i];
+}
+
 static void pollLinkControl(uint8_t r82, uint8_t r51)
 {
     uint8_t lc[12];
@@ -864,6 +950,22 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
     for (int i = 0; i < 12; i++)
         lcImage[i] = lc[i];
     lcHave = true;
+
+    // Talker alias block of the call being received
+    uint8_t taFlco = lc[0] & 0x3F;
+    if ((taFlco >= 4) && (taFlco <= 7) && (lc[1] == 0x00) && ((r51 & 0x04) == 0)
+        && callActive) {
+        unsigned b = taFlco - 4;
+        for (int i = 0; i < 7; i++)
+            taData[b][i] = lc[2 + i];
+        taHave |= (uint8_t)(1u << b);
+        decodeAlias();
+        if ((rxAlias[0] != '\0') && !taLogged) {
+            taLogged = true;
+            LOG_I("dmr", "talker alias: %s", rxAlias);
+        }
+        return;
+    }
 
     uint8_t par[3];
     rs129Parity(lc, par);
@@ -886,12 +988,21 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         uint32_t src = be24(&lc[6]);
         bool changed = !callActive || (flco != callInfo.flco)
                     || (dst != callInfo.dst) || (src != callInfo.src);
+        bool newSource = !callActive || (src != callInfo.src);
         callInfo.flco = flco;
         callInfo.dst = dst;
         callInfo.src = src;
-        // Private calls always pass: there is no own-ID setting yet.
+        // Group calls to another talkgroup and private calls to another
+        // radio are muted
         uint32_t tg = rxTalkgroup;
-        tgMuted = (flco == 0) && (tg != 0) && (dst != tg);
+        uint32_t own = ownId;
+        tgMuted = ((flco == 0) && (tg != 0) && (dst != tg))
+               || ((flco == 3) && (own != 0) && (dst != own));
+        if (newSource) {
+            taHave = 0;
+            taLogged = false;
+            rxAlias[0] = '\0';
+        }
         if (changed)
             LOG_I("dmr", "call: flco %u src %lu dst %lu%s 52=%02x 57=%02x",
                   flco, (unsigned long)src, (unsigned long)dst,
@@ -1065,17 +1176,21 @@ static void txReset()
     txTxIrqs = 0;
     txAlignIrqs = 0;
     txTcOn = false;
+    txSuperframe = 0;
+    txSfLc = txLc;
     txIsWake = false;
 }
 
-void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
+void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
+                 const char *alias)
 {
     if (callActive)
         endCall("transmit");
 
-    // Group voice call link control: FLCO 0, FID 0, no service options,
-    // destination and source IDs big-endian (as read on receive)
-    txLc[0] = 0x00;
+    // Voice call link control: FLCO 0 (group) or 3 (unit to unit), FID 0,
+    // no service options, destination and source IDs big-endian (as read on
+    // receive)
+    txLc[0] = privateCall ? 0x03 : 0x00;
     txLc[1] = 0x00;
     txLc[2] = 0x00;
     txLc[3] = (dst >> 16) & 0xFF;
@@ -1087,6 +1202,31 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
 
     txReset();
     txTimeslot = (timeslot > 2) ? 0 : timeslot;
+
+    // Talker alias blocks
+    size_t len = 0;
+    if (alias != NULL)
+        while ((len < 27) && (alias[len] != '\0'))
+            len++;
+    while ((len > 0) && (alias[len - 1] == ' '))
+        len--;
+    for (int b = 0; b < 4; b++)
+        for (int i = 0; i < 9; i++)
+            txTa[b][i] = 0x00;
+    txTaBlocks = 0;
+    if (len > 0) {
+        txTa[0][0] = 0x04;
+        txTa[0][2] = (uint8_t)((0x01 << 6) | (len << 1));
+        for (size_t i = 0; i < len; i++) {
+            if (i < 6)
+                txTa[0][3 + i] = (uint8_t)alias[i];
+            else
+                txTa[1 + ((i - 6) / 7)][2 + ((i - 6) % 7)] = (uint8_t)alias[i];
+        }
+        txTaBlocks = (len <= 6) ? 1 : (uint8_t)(1 + ((len - 6 + 6) / 7));
+        for (int b = 1; b < txTaBlocks; b++)
+            txTa[b][0] = (uint8_t)(0x04 + b);
+    }
 
     if (txTimeslot != 0) {
         /*
@@ -1101,8 +1241,9 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
         txTcOn = true;
         C6000.writeCfgRegister(0x56, 0x10);
         C6000.writeCfgRegister(0x40, 0xC3);
-        LOG_I("dmr", "tx start: src %lu dst %lu, through the repeater on TS%u",
-              (unsigned long)src, (unsigned long)dst, txTimeslot);
+        LOG_I("dmr", "tx start: src %lu %s %lu, through the repeater on TS%u",
+              (unsigned long)src, privateCall ? "private to" : "dst",
+              (unsigned long)dst, txTimeslot);
         rxSlotIrqs = 0;
         dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
         txState = TX_ALIGN; // last: the slot interrupt starts from here
@@ -1125,9 +1266,10 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
     C6000.writeCfgRegister(0x40, 0xA3);
 
     LOG_I("dmr",
-          "tx start: src %lu dst %lu, %lu slot interrupts since the "
+          "tx start: src %lu %s %lu, %lu slot interrupts since the "
           "last one",
-          (unsigned long)src, (unsigned long)dst, (unsigned long)rxSlotIrqs);
+          (unsigned long)src, privateCall ? "private to" : "dst",
+          (unsigned long)dst, (unsigned long)rxSlotIrqs);
     rxSlotIrqs = 0;
     dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
     txState = TX_HEADER; // last: the slot interrupt starts from here
@@ -1309,6 +1451,11 @@ void dmr_setRxTalkgroup(uint32_t tg)
     rxTalkgroup = tg;
 }
 
+void dmr_setOwnId(uint32_t id)
+{
+    ownId = id;
+}
+
 void dmr_setRxTimeslot(uint8_t ts)
 {
     rxTimeslot = (ts > 2) ? 0 : ts;
@@ -1320,5 +1467,11 @@ bool dmr_getCallInfo(dmrCallInfo_t *out)
         return false;
     *out = callInfo;
     out->slot = callSlot;
+    for (size_t i = 0; i < sizeof(out->alias); i++) {
+        out->alias[i] = rxAlias[i];
+        if (rxAlias[i] == '\0')
+            break;
+    }
+    out->alias[sizeof(out->alias) - 1] = '\0';
     return true;
 }

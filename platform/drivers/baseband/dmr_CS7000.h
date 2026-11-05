@@ -29,10 +29,11 @@ void dmr_terminate();
 
 /** Link control of the call being received. */
 typedef struct {
-    uint8_t flco; ///< 0 = group voice, 3 = unit-to-unit voice
-    uint32_t dst; ///< destination ID (talkgroup or radio)
-    uint32_t src; ///< source radio ID
-    uint8_t slot; ///< timeslot, 1 or 2; 0 when unknown (no timeslot set)
+    uint8_t flco;   ///< 0 = group voice, 3 = unit-to-unit voice
+    uint32_t dst;   ///< destination ID (talkgroup or radio)
+    uint32_t src;   ///< source radio ID
+    uint8_t slot;   ///< timeslot, 1 or 2; 0 when unknown (no timeslot set)
+    char alias[32]; ///< talker alias of the source, "" until received
 } dmrCallInfo_t;
 
 /** Returns false when no call is being received. */
@@ -40,9 +41,15 @@ bool dmr_getCallInfo(dmrCallInfo_t *out);
 
 /**
  * Talkgroup to receive: group calls to other talkgroups are muted and not
- * shown.  0 receives every call.  Private calls are always received.
+ * shown.  0 receives every group call.
  */
 void dmr_setRxTalkgroup(uint32_t tg);
+
+/**
+ * Own radio ID: private calls to other IDs are muted and not shown.  0
+ * receives every private call.
+ */
+void dmr_setOwnId(uint32_t id);
 
 /**
  * Timeslot to receive, 1 or 2: calls on the other slot are muted and not
@@ -52,7 +59,7 @@ void dmr_setRxTalkgroup(uint32_t tg);
 void dmr_setRxTimeslot(uint8_t ts);
 
 /**
- * Start transmitting a group voice call: voice LC headers, then voice bursts
+ * Start transmitting a voice call: voice LC headers, then voice bursts
  * from dmrAudio_popTxFrame(), until dmr_stopTx().  The caller starts the
  * encoder.
  *
@@ -65,8 +72,12 @@ void dmr_setRxTimeslot(uint8_t ts);
  * @param src: own radio ID.
  * @param dst: talkgroup.
  * @param timeslot: 0 for direct mode, 1 or 2 through a repeater.
+ * @param privateCall: true for a private (unit to unit) call to dst.
+ * @param alias: talker alias to send in the embedded signalling (up to 27
+ * characters), or NULL / "" for none.
  */
-void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot);
+void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
+                 const char *alias);
 
 /**
  * @return true when the receiver follows a repeater's signal: the CACH

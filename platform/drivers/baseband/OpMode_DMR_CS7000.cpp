@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <string.h>
 #include "interfaces/platform.h"
 #include "interfaces/radio.h"
 #include "interfaces/delays.h"
@@ -22,6 +23,12 @@ static constexpr uint16_t TX_TIMEOUT = 6000;
 
 // Talkgroup used when the Talkgroup setting is All (local, as on a hotspot)
 static constexpr uint32_t DEFAULT_TX_TG = 9;
+
+/*
+ * After a private call to this radio, a PTT press within this time answers
+ * the caller with a private call, as DMR radios do (call hang time).
+ */
+static constexpr long long PRIVATE_REPLY_MS = 5000;
 
 /*
  * Repeater (duplex hotspot) wake-up, with a timeslot set.  v48 on air: the
@@ -51,6 +58,8 @@ OpMode_DMR::OpMode_DMR()
     , wakeTries(0)
     , wakeTicks(0)
     , wakeStart(0)
+    , replyId(0)
+    , replyTime(0)
 {
 }
 
@@ -99,6 +108,15 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
 
     dmr_setRxTalkgroup(status->dmrRxTalkgroup);
     dmr_setRxTimeslot(status->dmrTimeslot);
+    dmr_setOwnId(status->dmrRadioId);
+
+    // Private call to this radio: remember the caller for a reply
+    dmrCallInfo_t call;
+    if (dmr_getCallInfo(&call) && (call.flco == 3) && (call.dst != 0)
+        && (call.dst == status->dmrRadioId)) {
+        replyId = call.src;
+        replyTime = getTick();
+    }
 
     if ((status->opStatus == OFF) && enterRx) {
         radio_disableRtx();
@@ -246,14 +264,40 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
     }
     dmrDiag_set(DIAG_STAGE, STAGE_ENCODER);
 
-    uint32_t tg = status->dmrRxTalkgroup;
-    if (tg == 0)
-        tg = DEFAULT_TX_TG;
+    /*
+     * Destination: the caller of a private call just received; else the
+     * Private Call setting; else the talkgroup (TG 9 with All).
+     */
+    uint32_t dst = status->dmrRxTalkgroup;
+    if (dst == 0)
+        dst = DEFAULT_TX_TG;
+    bool priv = false;
+    if ((replyId != 0) && ((getTick() - replyTime) < PRIVATE_REPLY_MS)) {
+        dst = replyId;
+        priv = true;
+        LOG_I("dmr", "reply to the private call from %lu",
+              (unsigned long)replyId);
+    } else if (status->dmrPrivateId != 0) {
+        dst = status->dmrPrivateId;
+        priv = true;
+    }
+
+    // Talker alias: the callsign, unless unset (default N0CALL) or off
+    const char *alias = NULL;
+    if (status->dmrTalkerAlias && (status->source_address[0] != '\0')
+        && (strncmp(status->source_address, "N0CALL", 10) != 0))
+        alias = status->source_address;
+    char aliasBuf[11];
+    if (alias != NULL) {
+        strncpy(aliasBuf, alias, 10);
+        aliasBuf[10] = '\0';
+        alias = aliasBuf;
+    }
 
     if (status->dmrTimeslot != 0) {
         // Through the repeater: the driver takes the slot timing from the
         // receiver before the RF chain leaves it
-        dmr_startTx(status->dmrRadioId, tg, status->dmrTimeslot);
+        dmr_startTx(status->dmrRadioId, dst, status->dmrTimeslot, priv, alias);
         radio_disableRtx();
         radio_enableTx();
         dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
@@ -261,7 +305,7 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
         radio_disableRtx();
         radio_enableTx();
         dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
-        dmr_startTx(status->dmrRadioId, tg, 0);
+        dmr_startTx(status->dmrRadioId, dst, 0, priv, alias);
     }
 
     status->opStatus = TX;

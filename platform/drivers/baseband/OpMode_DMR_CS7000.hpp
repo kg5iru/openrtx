@@ -54,6 +54,8 @@ private:
     uint8_t wakeTries;   ///< Wake-ups sent for this PTT press
     uint8_t wakeTicks;   ///< Updates since the current wake-up phase began
     long long wakeStart; ///< getTick() at the first wake-up
+    uint32_t replyId;    ///< Source of the last private call to this radio
+    long long replyTime; ///< getTick() when that call was last received
 };
 
 #endif /* OPMODE_DMR_CS7000_H */
