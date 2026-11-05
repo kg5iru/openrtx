@@ -480,7 +480,16 @@ void dmrDiag_kickWatchdog()
  * The power amplifier stays keyed for the whole transmission, as the stock
  * firmware does (OpMode_DMR keys it).
  */
-enum : uint8_t { TX_OFF = 0, TX_HEADER, TX_VOICE, TX_END, TX_DONE };
+enum : uint8_t {
+    TX_OFF = 0,
+    TX_HEADER,
+    TX_VOICE,
+    TX_END,
+    TX_DONE,
+    TX_WAKE,      ///< Repeater wake-up CSBK to arm
+    TX_WAKE_SENT, ///< Wake-up armed, going out in this slot
+    TX_ALIGN,     ///< Through a repeater: waiting for the own slot
+};
 
 static constexpr uint8_t TX_HEADERS = 3;
 
@@ -510,6 +519,82 @@ static volatile uint32_t txSlotIrqs = 0;
 static volatile uint32_t txTxIrqs = 0;
 // The first two voice bursts sent, logged at the end of the transmission
 static uint8_t txFirstBursts[2][27];
+
+/*
+ * Repeater (duplex hotspot) timing.  A repeater sends the timeslot number of
+ * each burst in the CACH TC bit, which the chip shows in reg 0x52 bit 2 in
+ * the layer 2 relay modes (reg 0x10 = 0x6C / 0x6D, timeslot set).  Like
+ * OpenGD77 (same chip, HR-C6000.c), the bit is read at every slot interrupt
+ * and followed with a local copy that toggles each slot: when the two agree
+ * on several slots in a row, the receiver is locked to the repeater, and the
+ * first burst of a transmission is armed at the slot interrupt where the
+ * local bit equals the own timeslot (TC 0 = TS1).  Once the RF chain is keyed
+ * the local bit just keeps toggling.
+ *
+ * The bit is read twice per slot interrupt: on its own (as OpenGD77 does)
+ * and after 0x50 and 0x51 (the order in which the voice burst reads saw it
+ * follow the timeslot, v37), each followed separately; either may lock.
+ */
+struct TcTrack {
+    uint8_t local;       ///< Expected TC bit at this slot interrupt
+    uint8_t lock;        ///< Agreements in a row, up to 8
+    uint8_t disagree;    ///< Recent disagreements; 4 re-sync to the read bit
+    uint32_t hist;       ///< Read bits, newest in bit 0
+};
+static TcTrack tcA, tcB; // A: 0x52 alone; B: after 0x50 and 0x51
+static constexpr uint8_t TC_LOCKED = 5;
+static volatile uint8_t txTimeslot = 0; // 0 = direct mode
+static uint8_t txTcIdx = 0;             // TC bit of the own slot
+static TcTrack *txTc = nullptr;         // the tracker the transmission uses
+static uint32_t txAlignIrqs = 0;        // slot interrupts before the header
+static uint32_t txTcHistA = 0, txTcHistB = 0;
+static uint8_t txLockA = 0, txLockB = 0;
+static uint8_t txCsbk[12];
+static bool txIsWake = false; // the transmission is a wake-up
+
+static void tcUpdate(TcTrack *t, uint8_t bit)
+{
+    t->hist = (t->hist << 1) | bit;
+    t->local ^= 1;
+    if (t->local == bit) {
+        if (t->lock < 8)
+            t->lock++;
+        if (t->disagree > 0)
+            t->disagree--;
+    } else {
+        if (t->lock > 0)
+            t->lock--;
+        if (++t->disagree > 3) {
+            t->local = bit;
+            t->disagree = 0;
+            t->lock = 0;
+        }
+    }
+}
+
+static void tcReset(TcTrack *t)
+{
+    t->local = 0;
+    t->lock = 0;
+    t->disagree = 0;
+    t->hist = 0;
+}
+
+static inline bool tcLocked(const TcTrack *t)
+{
+    return (t->lock >= TC_LOCKED) && (t->disagree == 0);
+}
+
+// Slot interrupt while receiving with a timeslot set
+static void trackTc()
+{
+    uint8_t a = (C6000.readCfgRegister(0x52) >> 2) & 1;
+    (void)C6000.readCfgRegister(0x50);
+    (void)C6000.readCfgRegister(0x51);
+    uint8_t b = (C6000.readCfgRegister(0x52) >> 2) & 1;
+    tcUpdate(&tcA, a);
+    tcUpdate(&tcB, b);
+}
 
 static void txSendTerminator()
 {
@@ -609,14 +694,48 @@ static void handleSlot()
         txSlotIrqs++;
         dmrDiag_inc(DIAG_SLOT_IRQ);
         dmrDiag_set(DIAG_IN_IRQ, 1);
-        if (txState != TX_DONE)
-            handleTxSlot();
+        if (txTc != nullptr)
+            txTc->local ^= 1;
+        switch (txState) {
+            case TX_DONE:
+                break;
+            case TX_WAKE:
+                // CSBK, data type 3 (manual 5.4.4; OpenGD77 wake-up)
+                C6000.writeCfgRegister(0x41, 0x80);
+                C6000.writeTxBurst(0x00, txCsbk, sizeof(txCsbk));
+                C6000.writeCfgRegister(0x50, 0x30);
+                txState = TX_WAKE_SENT;
+                break;
+            case TX_WAKE_SENT:
+                C6000.writeCfgRegister(0x41, 0x00);
+                txState = TX_DONE;
+                break;
+            case TX_ALIGN:
+                txAlignIrqs++;
+                if (txStopReq) {
+                    C6000.writeCfgRegister(0x41, 0x00);
+                    txState = TX_DONE;
+                } else if (txTc->local == txTcIdx) {
+                    txState = TX_HEADER;
+                    txArmSlot = false; // handleTxSlot() arms in this slot
+                    handleTxSlot();
+                } else {
+                    C6000.writeCfgRegister(0x41, 0x00);
+                }
+                break;
+            default:
+                handleTxSlot();
+                break;
+        }
         dmrDiag_set(DIAG_IN_IRQ, 0);
         return;
     }
 
     rxSlotIrqs++;
     rxSlotIrqsTotal++;
+
+    if (rxTimeslot != 0)
+        trackTc();
 
     // A receive request covers a single slot: the chip receives that slot and
     // then falls idle unless a fresh request is queued before the next
@@ -897,7 +1016,22 @@ void dmr_terminate()
     callActive = false;
 }
 
-void dmr_startTx(uint32_t src, uint32_t dst)
+static void txReset()
+{
+    txStopReq = false;
+    txHeaders = TX_HEADERS;
+    txVoiceN = 0;
+    txBursts = 0;
+    txUnderruns = 0;
+    txArmSlot = false;
+    txSlotIrqs = 0;
+    txTxIrqs = 0;
+    txAlignIrqs = 0;
+    txTc = nullptr;
+    txIsWake = false;
+}
+
+void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot)
 {
     if (callActive)
         endCall("transmit");
@@ -914,14 +1048,35 @@ void dmr_startTx(uint32_t src, uint32_t dst)
     txLc[7] = (src >> 8) & 0xFF;
     txLc[8] = src & 0xFF;
 
-    txStopReq = false;
-    txHeaders = TX_HEADERS;
-    txVoiceN = 0;
-    txBursts = 0;
-    txUnderruns = 0;
-    txArmSlot = false;
-    txSlotIrqs = 0;
-    txTxIrqs = 0;
+    txReset();
+    txTimeslot = (timeslot > 2) ? 0 : timeslot;
+
+    if (txTimeslot != 0) {
+        /*
+         * Through a repeater: the slot timing comes from its signal.  The
+         * chip stays in passive mode with the relay mode of the timeslot
+         * setting (0x6C / 0x6D), with transmission enabled (0xC3, as
+         * OpenGD77 does all the time in repeater mode); the time axis keeps
+         * running on the last received timing once the RF chain is keyed.
+         */
+        txTcIdx = txTimeslot - 1;
+        txTc = tcLocked(&tcA) ? &tcA : &tcB;
+        txTcHistA = tcA.hist;
+        txTcHistB = tcB.hist;
+        txLockA = tcA.lock;
+        txLockB = tcB.lock;
+        C6000.writeCfgRegister(0x56, 0x10);
+        C6000.writeCfgRegister(0x40, 0xC3);
+        LOG_I("dmr",
+              "tx start: src %lu dst %lu, through the repeater on TS%u "
+              "(tc %c)",
+              (unsigned long)src, (unsigned long)dst, txTimeslot,
+              (txTc == &tcA) ? 'A' : 'B');
+        rxSlotIrqs = 0;
+        dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
+        txState = TX_ALIGN; // last: the slot interrupt starts from here
+        return;
+    }
 
     /*
      * HR_C6000 manual, 5.4.4/5.4.5 ("active sending", "voice
@@ -945,6 +1100,44 @@ void dmr_startTx(uint32_t src, uint32_t dst)
     rxSlotIrqs = 0;
     dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
     txState = TX_HEADER; // last: the slot interrupt starts from here
+}
+
+bool dmr_bsLocked()
+{
+    return (rxTimeslot != 0) && (tcLocked(&tcA) || tcLocked(&tcB));
+}
+
+void dmr_startWakeup(uint32_t src)
+{
+    if (callActive)
+        endCall("transmit");
+
+    /*
+     * CSBK BS_Dwn_Act (opcode 0x38, last block): BS address all ones and
+     * the source ID, as the owner's Anytone sends it (v48 off-air capture:
+     * b8 00 00 00 ff ff ff + ID); the chip adds the CRC.  Sent in active
+     * mode (0xE3, as OpenGD77 sends its wake-up) on the relay mode set.
+     */
+    txCsbk[0] = 0xB8;
+    txCsbk[1] = 0x00;
+    txCsbk[2] = 0x00;
+    txCsbk[3] = 0x00;
+    txCsbk[4] = 0xFF;
+    txCsbk[5] = 0xFF;
+    txCsbk[6] = 0xFF;
+    txCsbk[7] = (src >> 16) & 0xFF;
+    txCsbk[8] = (src >> 8) & 0xFF;
+    txCsbk[9] = src & 0xFF;
+    txCsbk[10] = 0x00;
+    txCsbk[11] = 0x00;
+
+    txReset();
+    txTimeslot = 0;
+    tcReset(&tcA);
+    tcReset(&tcB);
+    txIsWake = true;
+    C6000.writeCfgRegister(0x40, 0xE3);
+    txState = TX_WAKE;
 }
 
 uint32_t dmr_rxSlotIrqs()
@@ -1010,6 +1203,15 @@ void dmr_endTx(uint32_t elapsedMs)
     haveLast = false;
     lcHave = false;
 
+    // The receive timing starts over: the repeater lock is found again
+    tcReset(&tcA);
+    tcReset(&tcB);
+
+    if (txIsWake) {
+        LOG_I("dmr", "wake-up %s", clean ? "sent" : "not sent (aborted)");
+        return;
+    }
+
     LOG_I("dmr", "tx end%s: %lu voice bursts, %lu frames sent as silence",
           clean ? "" : " (aborted)", (unsigned long)txBursts,
           (unsigned long)txUnderruns);
@@ -1017,6 +1219,13 @@ void dmr_endTx(uint32_t elapsedMs)
           (unsigned long)elapsedMs, (unsigned long)txSlotIrqs,
           (unsigned long)txTxIrqs);
     LOG_I("dmr", "tx: reg 0x10 back to %02x", slotModeReg);
+    if (txTimeslot != 0) {
+        LOG_I("dmr",
+              "tx: header after %lu slot interrupts; tc A %08lx lock %u, "
+              "B %08lx lock %u",
+              (unsigned long)txAlignIrqs, (unsigned long)txTcHistA, txLockA,
+              (unsigned long)txTcHistB, txLockB);
+    }
     if (txBursts >= 1)
         LOG_HEX(LOG_LVL_INFO, "dmr", "tx burst 0", txFirstBursts[0], 27);
     if (txBursts >= 2)

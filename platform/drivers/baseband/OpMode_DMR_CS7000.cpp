@@ -23,6 +23,18 @@ static constexpr uint16_t TX_TIMEOUT = 6000;
 // Talkgroup used when the Talkgroup setting is All (local, as on a hotspot)
 static constexpr uint32_t DEFAULT_TX_TG = 9;
 
+/*
+ * Repeater (duplex hotspot) wake-up, with a timeslot set.  v48 on air: the
+ * hotspot repeated the owner's Anytone but not the CS7000.  Off air, the
+ * Anytone sends a CSBK BS_Dwn_Act on the hotspot input, waits about 0.6 s,
+ * then sends its call in step with the hotspot's slots; the CS7000 sent its
+ * call at once on its own timing.  Like OpenGD77: one wake-up, up to 600 ms
+ * for the repeater's signal, 3 tries.
+ */
+enum : uint8_t { WAKE_NONE = 0, WAKE_SENDING, WAKE_WAITING };
+static constexpr uint8_t WAKE_WAIT_TICKS = 20; // 600 ms
+static constexpr uint8_t WAKE_TRIES = 3;
+
 OpMode_DMR::OpMode_DMR()
     : enterRx(true)
     , audioOn(false)
@@ -34,6 +46,10 @@ OpMode_DMR::OpMode_DMR()
     , txStart(0)
     , stopTick(0)
     , micPath(-1)
+    , wakePhase(WAKE_NONE)
+    , wakeTries(0)
+    , wakeTicks(0)
+    , wakeStart(0)
 {
 }
 
@@ -47,6 +63,7 @@ void OpMode_DMR::enable()
     audioOn = false;
     transmitting = false;
     pttHeld = false;
+    wakePhase = WAKE_NONE;
 }
 
 void OpMode_DMR::disable()
@@ -63,6 +80,10 @@ void OpMode_DMR::disable()
         dmrDiag_txEnd();
         transmitting = false;
     }
+
+    if (wakePhase == WAKE_SENDING)
+        dmr_endTx(0);
+    wakePhase = WAKE_NONE;
 
     stopRxAudio();
 
@@ -110,24 +131,33 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
     }
 
     /*
-     * Transmit (bring-up, v40: direct mode, 1 kHz test tone).  A press of the
-     * PTT starts one transmission; releasing it, or the time-out, sends the
-     * terminator, and once it is out the radio goes back to receive.
+     * Transmit.  A press of the PTT starts one transmission; releasing it, or
+     * the time-out, sends the terminator, and once it is out the radio goes
+     * back to receive.  With a timeslot set the call goes through a repeater
+     * or duplex hotspot, woken up first if its signal is not received.
      */
     bool ptt = platform_getPttStatus();
     if (!ptt)
         pttHeld = false;
 
-    if (!transmitting && ptt && !pttHeld && (status->opStatus == RX)) {
+    if (!transmitting && ptt && !pttHeld && (status->opStatus == RX)
+        && (wakePhase == WAKE_NONE)) {
         pttHeld = true;
         if (status->txDisable != 0)
             LOG_W("dmr", "PTT: transmit disabled on this channel");
         else if (status->dmrRadioId == 0)
             LOG_W("dmr", "PTT: no radio ID set (Settings > DMR)");
-        else {
+        else if ((status->dmrTimeslot != 0) && !dmr_bsLocked()) {
+            wakeTries = 0;
+            wakeStart = getTick();
+            startWakeup(status);
+        } else {
             startTx(status);
         }
     }
+
+    if (wakePhase != WAKE_NONE)
+        updateWakeup(status, ptt);
 
     if (transmitting) {
         txTicks++;
@@ -195,10 +225,19 @@ void OpMode_DMR::startTx(rtxStatus_t *const status)
     if (tg == 0)
         tg = DEFAULT_TX_TG;
 
-    radio_disableRtx();
-    radio_enableTx();
-    dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
-    dmr_startTx(status->dmrRadioId, tg);
+    if (status->dmrTimeslot != 0) {
+        // Through the repeater: the driver takes the slot timing from the
+        // receiver before the RF chain leaves it
+        dmr_startTx(status->dmrRadioId, tg, status->dmrTimeslot);
+        radio_disableRtx();
+        radio_enableTx();
+        dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
+    } else {
+        radio_disableRtx();
+        radio_enableTx();
+        dmrDiag_set(DIAG_STAGE, STAGE_KEYED);
+        dmr_startTx(status->dmrRadioId, tg, 0);
+    }
 
     status->opStatus = TX;
     transmitting = true;
@@ -223,6 +262,64 @@ void OpMode_DMR::finishTx(rtxStatus_t *const status)
     status->opStatus = RX;
     transmitting = false;
     platform_ledOff(RED);
+}
+
+void OpMode_DMR::startWakeup(rtxStatus_t *const status)
+{
+    dmrDiag_startWatchdog();
+    stopRxAudio();
+    radio_disableRtx();
+    radio_enableTx();
+    dmr_startWakeup(status->dmrRadioId);
+    wakeTries++;
+    wakePhase = WAKE_SENDING;
+    wakeTicks = 0;
+    platform_ledOn(RED);
+}
+
+void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt)
+{
+    wakeTicks++;
+
+    if (wakePhase == WAKE_SENDING) {
+        // The CSBK goes out within two slots; back to receive after it
+        if (!dmr_txDone() && (wakeTicks < 5))
+            return;
+        if (!dmr_txDone())
+            LOG_W("dmr", "wake-up not sent within 150 ms");
+        dmr_endTx(0);
+        radio_disableRtx();
+        radio_enableRx();
+        platform_ledOff(RED);
+        wakePhase = WAKE_WAITING;
+        wakeTicks = 0;
+        return;
+    }
+
+    // Waiting for the repeater
+    if (!ptt) {
+        LOG_I("dmr", "PTT released while waking the repeater");
+        wakePhase = WAKE_NONE;
+        return;
+    }
+
+    if (dmr_bsLocked()) {
+        LOG_I("dmr", "repeater answered %lu ms after the first wake-up (%u)",
+              (unsigned long)(getTick() - wakeStart), wakeTries);
+        wakePhase = WAKE_NONE;
+        startTx(status);
+        return;
+    }
+
+    if (wakeTicks >= WAKE_WAIT_TICKS) {
+        if (wakeTries < WAKE_TRIES) {
+            startWakeup(status);
+        } else {
+            LOG_W("dmr", "no answer from the repeater after %u wake-ups",
+                  wakeTries);
+            wakePhase = WAKE_NONE;
+        }
+    }
 }
 
 bool OpMode_DMR::rxSquelchOpen()

@@ -36,17 +36,23 @@ private:
     void stopRxAudio();
     void startTx(rtxStatus_t *const status);
     void finishTx(rtxStatus_t *const status);
+    void startWakeup(rtxStatus_t *const status);
+    void updateWakeup(rtxStatus_t *const status, const bool ptt);
 
     bool enterRx;
     bool audioOn;
     pathId rxAudioPath;
-    uint8_t idleTicks; ///< Updates (30 ms) since the call ended
+    uint8_t idleTicks;   ///< Updates (30 ms) since the call ended
     bool transmitting;
-    bool pttHeld;      ///< PTT pressed and already acted on
-    uint16_t txTicks;  ///< Updates (30 ms) since the transmission started
-    long long txStart; ///< getTick() at the start of the transmission
-    uint16_t stopTick; ///< txTicks when the stop was requested, 0 = not yet
-    pathId micPath;    ///< Microphone path while transmitting
+    bool pttHeld;        ///< PTT pressed and already acted on
+    uint16_t txTicks;    ///< Updates (30 ms) since the transmission started
+    long long txStart;   ///< getTick() at the start of the transmission
+    uint16_t stopTick;   ///< txTicks when the stop was requested, 0 = not yet
+    pathId micPath;      ///< Microphone path while transmitting
+    uint8_t wakePhase;   ///< Repeater wake-up: 0 none, 1 sending, 2 waiting
+    uint8_t wakeTries;   ///< Wake-ups sent for this PTT press
+    uint8_t wakeTicks;   ///< Updates since the current wake-up phase began
+    long long wakeStart; ///< getTick() at the first wake-up
 };
 
 #endif /* OPMODE_DMR_CS7000_H */

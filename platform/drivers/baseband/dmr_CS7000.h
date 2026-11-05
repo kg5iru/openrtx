@@ -52,14 +52,37 @@ void dmr_setRxTalkgroup(uint32_t tg);
 void dmr_setRxTimeslot(uint8_t ts);
 
 /**
- * Start transmitting a group voice call in direct mode (bring-up): three
- * voice LC headers, then voice bursts from dmrAudio_popTxFrame(), until
- * dmr_stopTx().  The caller keys the RF chain before and starts the encoder.
+ * Start transmitting a group voice call: voice LC headers, then voice bursts
+ * from dmrAudio_popTxFrame(), until dmr_stopTx().  The caller starts the
+ * encoder.
+ *
+ * In direct mode the chip makes its own slot timing and the caller keys the
+ * RF chain before.  Through a repeater or hotspot (timeslot set) the timing
+ * comes from the repeater's signal, which must be locked (dmr_bsLocked());
+ * the caller keys the RF chain right after this call, which stops using the
+ * received timeslot bit, and the first header waits for the slot.
  *
  * @param src: own radio ID.
  * @param dst: talkgroup.
+ * @param timeslot: 0 for direct mode, 1 or 2 through a repeater.
  */
-void dmr_startTx(uint32_t src, uint32_t dst);
+void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot);
+
+/**
+ * @return true when the receiver follows a repeater's signal: the CACH
+ * timeslot bit has alternated on the last slots.  Only with a timeslot set.
+ */
+bool dmr_bsLocked();
+
+/**
+ * Send one repeater wake-up (CSBK BS_Dwn_Act, as an HT sends before its
+ * first transmission through an idle repeater or duplex hotspot).  The
+ * caller keys the RF chain before; dmr_txDone() tells when it is out, then
+ * dmr_endTx() goes back to receive.
+ *
+ * @param src: own radio ID.
+ */
+void dmr_startWakeup(uint32_t src);
 
 /**
  * Tell the driver the value written to reg 0x10 (layer 2 mode / timeslot),
