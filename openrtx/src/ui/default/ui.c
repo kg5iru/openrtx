@@ -1167,6 +1167,68 @@ static void _ui_menuBack(uint8_t prev_state)
     }
 }
 
+#ifdef CONFIG_DMR_CS7000
+/*
+ * Step a DMR setting chosen from a list one value up or down, the same in
+ * edit mode and with left/right outside it: lists wrap around, the mic gain
+ * stops at its ends, on/off settings toggle.  Returns false for the settings
+ * that are typed in.
+ */
+static bool _ui_stepDMRSetting(uint8_t item, bool up)
+{
+    settings_t *s = &state.settings;
+
+    switch(item)
+    {
+        case DMR_COLOUR_CODE:
+            settings_setDmrColourCode(s, settings_dmrColourCode(s) +
+                                         (up ? 1 : 15));
+            break;
+
+        case DMR_TIMESLOT:      // Any -> 1 -> 2 -> Any
+            s->dmr_ts = (settings_dmrTimeslot(s) + (up ? 1 : 2)) % 3;
+            break;
+
+        case DMR_MONITOR:       // Off -> Single TS -> Any TS -> Off
+            s->dmr_monitor = (settings_dmrMonitor(s) + (up ? 1 : 2)) % 3;
+            break;
+
+        case DMR_MIC_GAIN:
+        {
+            uint8_t g = settings_dmrMicGainStep(s);
+            if(up && (g < (DMR_MIC_GAIN_STEPS - 1)))
+                settings_setDmrMicGainStep(s, g + 1);
+            else if(!up && (g > 0))
+                settings_setDmrMicGainStep(s, g - 1);
+            break;
+        }
+
+        case DMR_APRS_INTERVAL:
+        {
+            uint8_t i = s->dmr_aprsInterval;
+            if(i >= DMR_APRS_INTERVALS)
+                i = 0;
+            i += up ? 1 : (DMR_APRS_INTERVALS - 1);
+            s->dmr_aprsInterval = i % DMR_APRS_INTERVALS;
+            break;
+        }
+
+        case DMR_APRS_PTT:
+            s->dmr_aprsPtt = (s->dmr_aprsPtt == 0) ? 1 : 0;
+            break;
+
+        case DMR_TALKER_ALIAS:
+            s->dmr_taOff = (s->dmr_taOff == 0) ? 1 : 0;
+            break;
+
+        default:
+            return false;
+    }
+
+    return true;
+}
+#endif
+
 static void _ui_textInputReset(char *buf, size_t bufSize)
 {
     ui_state.input_number = 0;
@@ -2511,106 +2573,24 @@ void ui_updateFSM(bool *sync_rtx)
                 break;
 #endif
 #ifdef CONFIG_DMR_CS7000
-            // DMR Settings: colour code, timeslot and receive talkgroup filter
+            // DMR Settings: values chosen from a list, or IDs typed in
             case SETTINGS_DMR:
                 if(ui_state.edit_mode)
                 {
-                    if(ui_state.menu_selected == DMR_MIC_GAIN)
+                    uint8_t sel = ui_state.menu_selected;
+                    if(!ui_isDMRIdSetting(sel))
                     {
-                        uint8_t g = settings_dmrMicGainStep(&state.settings);
-                        if((msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                            msg.keys & KEY_LEFT) && (g > 0))
-                            settings_setDmrMicGainStep(&state.settings, g - 1);
-                        else if((msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
-                                 msg.keys & KEY_RIGHT) &&
-                                (g < (DMR_MIC_GAIN_STEPS - 1)))
-                            settings_setDmrMicGainStep(&state.settings, g + 1);
-                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
-                            ui_state.edit_mode = false;
-                        *sync_rtx = true;
-                    }
-                    else if(ui_state.menu_selected == DMR_TIMESLOT)
-                    {
-                        // Any -> 1 -> 2 -> Any
-                        uint8_t ts = settings_dmrTimeslot(&state.settings);
                         if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
                            msg.keys & KEY_LEFT)
-                            state.settings.dmr_ts = (ts + 2) % 3;
+                            _ui_stepDMRSetting(sel, false);
                         else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
                                 msg.keys & KEY_RIGHT)
-                            state.settings.dmr_ts = (ts + 1) % 3;
+                            _ui_stepDMRSetting(sel, true);
                         else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
                             ui_state.edit_mode = false;
                         *sync_rtx = true;
                     }
-                    else if(ui_state.menu_selected == DMR_APRS_INTERVAL)
-                    {
-                        uint8_t i = state.settings.dmr_aprsInterval;
-                        if(i >= DMR_APRS_INTERVALS)
-                            i = 0;
-                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                           msg.keys & KEY_LEFT)
-                            i = (i + DMR_APRS_INTERVALS - 1) %
-                                DMR_APRS_INTERVALS;
-                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
-                                msg.keys & KEY_RIGHT)
-                            i = (i + 1) % DMR_APRS_INTERVALS;
-                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
-                            ui_state.edit_mode = false;
-                        state.settings.dmr_aprsInterval = i;
-                        *sync_rtx = true;
-                    }
-                    else if(ui_state.menu_selected == DMR_APRS_PTT)
-                    {
-                        if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
-                            ui_state.edit_mode = false;
-                        else if(msg.keys & KEY_DOWN || msg.keys & KEY_UP ||
-                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
-                                msg.keys & KNOB_LEFT || msg.keys & KNOB_RIGHT)
-                            state.settings.dmr_aprsPtt =
-                                (state.settings.dmr_aprsPtt == 0) ? 1 : 0;
-                        *sync_rtx = true;
-                    }
-                    else if(ui_state.menu_selected == DMR_MONITOR)
-                    {
-                        // Off -> Single TS -> Any TS -> Off
-                        uint8_t m = settings_dmrMonitor(&state.settings);
-                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                           msg.keys & KEY_LEFT)
-                            state.settings.dmr_monitor = (m + 2) % 3;
-                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
-                                msg.keys & KEY_RIGHT)
-                            state.settings.dmr_monitor = (m + 1) % 3;
-                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
-                            ui_state.edit_mode = false;
-                        *sync_rtx = true;
-                    }
-                    else if(ui_state.menu_selected == DMR_TALKER_ALIAS)
-                    {
-                        if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
-                            ui_state.edit_mode = false;
-                        else if(msg.keys & KEY_DOWN || msg.keys & KEY_UP ||
-                                msg.keys & KEY_LEFT || msg.keys & KEY_RIGHT ||
-                                msg.keys & KNOB_LEFT || msg.keys & KNOB_RIGHT)
-                            state.settings.dmr_taOff =
-                                (state.settings.dmr_taOff == 0) ? 1 : 0;
-                        *sync_rtx = true;
-                    }
-                    else if(ui_state.menu_selected == DMR_COLOUR_CODE)
-                    {
-                        uint8_t cc = settings_dmrColourCode(&state.settings);
-                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
-                           msg.keys & KEY_LEFT)
-                            settings_setDmrColourCode(&state.settings, cc + 15);
-                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
-                                msg.keys & KEY_RIGHT)
-                            settings_setDmrColourCode(&state.settings, cc + 1);
-                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
-                            ui_state.edit_mode = false;
-                        *sync_rtx = true;
-                    }
-                    else // DMR_TALKGROUP, DMR_RADIO_ID, DMR_PRIVATE_ID:
-                         // digits, 0 or empty = none
+                    else // digits, 0 or empty = none
                     {
                         size_t len = strnlen(ui_state.new_dmr_tg,
                                              sizeof(ui_state.new_dmr_tg));
@@ -2621,11 +2601,11 @@ void ui_updateFSM(bool *sync_rtx)
                                 tg = (tg * 10) + (ui_state.new_dmr_tg[i] - '0');
                             if(tg > 16777215)
                                 tg = 16777215;
-                            if(ui_state.menu_selected == DMR_RADIO_ID)
+                            if(sel == DMR_RADIO_ID)
                                 state.settings.dmr_id = tg;
-                            else if(ui_state.menu_selected == DMR_PRIVATE_ID)
+                            else if(sel == DMR_PRIVATE_ID)
                                 state.settings.dmr_privId = tg;
-                            else if(ui_state.menu_selected == DMR_APRS_ID)
+                            else if(sel == DMR_APRS_ID)
                                 state.settings.dmr_aprsId = tg;
                             else
                                 state.settings.dmr_rxTg = tg;
@@ -2654,10 +2634,7 @@ void ui_updateFSM(bool *sync_rtx)
                 else if(msg.keys & KEY_ENTER)
                 {
                     ui_state.edit_mode = true;
-                    if((ui_state.menu_selected == DMR_TALKGROUP) ||
-                       (ui_state.menu_selected == DMR_RADIO_ID) ||
-                       (ui_state.menu_selected == DMR_PRIVATE_ID) ||
-                       (ui_state.menu_selected == DMR_APRS_ID))
+                    if(ui_isDMRIdSetting(ui_state.menu_selected))
                         memset(ui_state.new_dmr_tg, 0,
                                sizeof(ui_state.new_dmr_tg));
                 }
@@ -2665,62 +2642,11 @@ void ui_updateFSM(bool *sync_rtx)
                     _ui_menuUp(settings_dmr_num);
                 else if(msg.keys & KEY_DOWN || msg.keys & KNOB_RIGHT)
                     _ui_menuDown(settings_dmr_num);
+                // Left/right change a list value without entering edit mode
                 else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_COLOUR_CODE))
+                        _ui_stepDMRSetting(ui_state.menu_selected,
+                                           (msg.keys & KEY_RIGHT) != 0))
                 {
-                    uint8_t cc = settings_dmrColourCode(&state.settings);
-                    cc += (msg.keys & KEY_RIGHT) ? 1 : 15;
-                    settings_setDmrColourCode(&state.settings, cc);
-                    *sync_rtx = true;
-                }
-                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_MIC_GAIN))
-                {
-                    uint8_t g = settings_dmrMicGainStep(&state.settings);
-                    if((msg.keys & KEY_RIGHT) && (g < (DMR_MIC_GAIN_STEPS - 1)))
-                        settings_setDmrMicGainStep(&state.settings, g + 1);
-                    else if((msg.keys & KEY_LEFT) && (g > 0))
-                        settings_setDmrMicGainStep(&state.settings, g - 1);
-                    *sync_rtx = true;
-                }
-                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_APRS_PTT))
-                {
-                    state.settings.dmr_aprsPtt =
-                        (state.settings.dmr_aprsPtt == 0) ? 1 : 0;
-                    *sync_rtx = true;
-                }
-                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_APRS_INTERVAL))
-                {
-                    uint8_t i = state.settings.dmr_aprsInterval;
-                    if(i >= DMR_APRS_INTERVALS)
-                        i = 0;
-                    i += (msg.keys & KEY_RIGHT) ? 1 : (DMR_APRS_INTERVALS - 1);
-                    state.settings.dmr_aprsInterval = i % DMR_APRS_INTERVALS;
-                    *sync_rtx = true;
-                }
-                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_MONITOR))
-                {
-                    uint8_t m = settings_dmrMonitor(&state.settings);
-                    m += (msg.keys & KEY_RIGHT) ? 1 : 2;
-                    state.settings.dmr_monitor = m % 3;
-                    *sync_rtx = true;
-                }
-                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_TALKER_ALIAS))
-                {
-                    state.settings.dmr_taOff =
-                        (state.settings.dmr_taOff == 0) ? 1 : 0;
-                    *sync_rtx = true;
-                }
-                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
-                        (ui_state.menu_selected == DMR_TIMESLOT))
-                {
-                    uint8_t ts = settings_dmrTimeslot(&state.settings);
-                    ts += (msg.keys & KEY_RIGHT) ? 1 : 2;
-                    state.settings.dmr_ts = ts % 3;
                     *sync_rtx = true;
                 }
                 else if(msg.keys & KEY_ESC)

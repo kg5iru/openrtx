@@ -144,21 +144,15 @@ void _ui_drawModeInfo(ui_state_t* ui_state)
                               (unsigned long) call.src);
                 // Group call: TG <talkgroup>; private call: PC <ID>.  The
                 // timeslot when known, DMO for a direct mode call.
+                char where[6] = "";
                 if(call.direct)
-                    gfx_print(layout.line2_pos, layout.line2_font,
-                              TEXT_ALIGN_CENTER, color_white, "DMO %s %lu",
-                              (call.flco == 0) ? "TG" : "PC",
-                              (unsigned long) call.dst);
+                    sniprintf(where, sizeof(where), "DMO ");
                 else if(call.slot != 0)
-                    gfx_print(layout.line2_pos, layout.line2_font,
-                              TEXT_ALIGN_CENTER, color_white, "TS%u %s %lu",
-                              call.slot, (call.flco == 0) ? "TG" : "PC",
-                              (unsigned long) call.dst);
-                else
-                    gfx_print(layout.line2_pos, layout.line2_font,
-                              TEXT_ALIGN_CENTER, color_white, "%s %lu",
-                              (call.flco == 0) ? "TG" : "PC",
-                              (unsigned long) call.dst);
+                    sniprintf(where, sizeof(where), "TS%u ", call.slot);
+                gfx_print(layout.line2_pos, layout.line2_font,
+                          TEXT_ALIGN_CENTER, color_white, "%s%s %lu", where,
+                          (call.flco == 0) ? "TG" : "PC",
+                          (unsigned long) call.dst);
             }
             else
             {

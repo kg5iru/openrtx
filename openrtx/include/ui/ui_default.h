@@ -166,6 +166,16 @@ enum settingsDMRItems
     DMR_APRS_PTT,
     DMR_APRS_INTERVAL
 };
+
+/**
+ * DMR settings typed in as digits (talkgroup and IDs); the others are chosen
+ * from a list.
+ */
+static inline bool ui_isDMRIdSetting(uint8_t item)
+{
+    return (item == DMR_TALKGROUP) || (item == DMR_RADIO_ID) ||
+           (item == DMR_PRIVATE_ID) || (item == DMR_APRS_ID);
+}
 #endif
 
 enum settingsFMItems

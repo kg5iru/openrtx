@@ -451,8 +451,9 @@ int _ui_getM17ValueName(char *buf, uint8_t max_len, uint8_t index)
 #endif
 
 #ifdef CONFIG_DMR_CS7000
-// Talkgroup being typed, shown in place of the stored one while editing
-static const char *dmrTgTyping = NULL;
+// Talkgroup or ID being typed, shown in place of the stored one in its row
+static const char *dmrTyping = NULL;
+static uint8_t dmrTypingRow = 0;
 
 int _ui_getDMREntryName(char *buf, uint8_t max_len, uint8_t index)
 {
@@ -463,21 +464,40 @@ int _ui_getDMREntryName(char *buf, uint8_t max_len, uint8_t index)
     return 0;
 }
 
+// A talkgroup or ID: being typed, none (0) or the number
+static void _ui_dmrIdValue(char *buf, uint8_t max_len, uint8_t index,
+                           uint32_t id, const char *none)
+{
+    if((dmrTyping != NULL) && (index == dmrTypingRow))
+        sniprintf(buf, max_len, "%s_", dmrTyping);
+    else if(id == 0)
+        sniprintf(buf, max_len, "%s", none);
+    else
+        sniprintf(buf, max_len, "%lu", (unsigned long) id);
+}
+
+// On/off settings
+static const char *_ui_onOff(bool on)
+{
+    return on ? "On" : "Off";
+}
+
 int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
 {
     if(index >= settings_dmr_num)
         return -1;
 
+    const settings_t *s = &last_state.settings;
+
     switch(index)
     {
         case DMR_COLOUR_CODE:
-            sniprintf(buf, max_len, "%u",
-                      settings_dmrColourCode(&last_state.settings));
+            sniprintf(buf, max_len, "%u", settings_dmrColourCode(s));
             break;
 
         case DMR_TIMESLOT:
         {
-            uint8_t ts = settings_dmrTimeslot(&last_state.settings);
+            uint8_t ts = settings_dmrTimeslot(s);
             if(ts == 0)
                 sniprintf(buf, max_len, "Any");
             else
@@ -487,74 +507,51 @@ int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
 
         case DMR_MIC_GAIN:
         {
-            int db = (3 * (int) settings_dmrMicGainStep(&last_state.settings))
-                   - 12;
+            int db = (3 * (int) settings_dmrMicGainStep(s)) - 12;
             sniprintf(buf, max_len, "%+d dB", db);
             break;
         }
 
+        case DMR_TALKGROUP:
+            _ui_dmrIdValue(buf, max_len, index, s->dmr_rxTg, "All");
+            break;
+
         case DMR_RADIO_ID:
-            if(dmrTgTyping != NULL)
-                sniprintf(buf, max_len, "%s_", dmrTgTyping);
-            else if(last_state.settings.dmr_id == 0)
-                sniprintf(buf, max_len, "Not set");
-            else
-                sniprintf(buf, max_len, "%lu",
-                          (unsigned long) last_state.settings.dmr_id);
+            _ui_dmrIdValue(buf, max_len, index, s->dmr_id, "Not set");
             break;
 
         case DMR_PRIVATE_ID:
-            if(dmrTgTyping != NULL)
-                sniprintf(buf, max_len, "%s_", dmrTgTyping);
-            else if(last_state.settings.dmr_privId == 0)
-                sniprintf(buf, max_len, "Off");
-            else
-                sniprintf(buf, max_len, "%lu",
-                          (unsigned long) last_state.settings.dmr_privId);
+            _ui_dmrIdValue(buf, max_len, index, s->dmr_privId, "Off");
             break;
+
         case DMR_APRS_ID:
-            if(dmrTgTyping != NULL)
-                sniprintf(buf, max_len, "%s_", dmrTgTyping);
-            else if(last_state.settings.dmr_aprsId == 0)
-                sniprintf(buf, max_len, "Off");
-            else
-                sniprintf(buf, max_len, "%lu",
-                          (unsigned long) last_state.settings.dmr_aprsId);
+            _ui_dmrIdValue(buf, max_len, index, s->dmr_aprsId, "Off");
             break;
+
         case DMR_APRS_PTT:
-            sniprintf(buf, max_len, "%s",
-                      (last_state.settings.dmr_aprsPtt != 0) ? "On" : "Off");
+            sniprintf(buf, max_len, "%s", _ui_onOff(s->dmr_aprsPtt != 0));
             break;
+
+        case DMR_TALKER_ALIAS:
+            sniprintf(buf, max_len, "%s", _ui_onOff(s->dmr_taOff == 0));
+            break;
+
         case DMR_APRS_INTERVAL:
         {
-            uint16_t sec = settings_dmrAprsIntervalSec(
-                               last_state.settings.dmr_aprsInterval);
+            uint16_t sec = settings_dmrAprsIntervalSec(s->dmr_aprsInterval);
             if(sec == 0)
                 sniprintf(buf, max_len, "Off");
             else
                 sniprintf(buf, max_len, "%u min", sec / 60);
             break;
         }
+
         case DMR_MONITOR:
         {
             static const char *modes[] = { "Off", "Single TS", "Any TS" };
-            sniprintf(buf, max_len, "%s",
-                      modes[settings_dmrMonitor(&last_state.settings)]);
+            sniprintf(buf, max_len, "%s", modes[settings_dmrMonitor(s)]);
             break;
         }
-        case DMR_TALKER_ALIAS:
-            sniprintf(buf, max_len, "%s",
-                      (last_state.settings.dmr_taOff == 0) ? "On" : "Off");
-            break;
-        case DMR_TALKGROUP:
-            if(dmrTgTyping != NULL)
-                sniprintf(buf, max_len, "%s_", dmrTgTyping);
-            else if(last_state.settings.dmr_rxTg == 0)
-                sniprintf(buf, max_len, "All");
-            else
-                sniprintf(buf, max_len, "%lu",
-                          (unsigned long) last_state.settings.dmr_rxTg);
-            break;
     }
 
     return 0;
@@ -568,14 +565,12 @@ void _ui_drawSettingsDMR(ui_state_t* ui_state)
               "DMR");
 
     bool typing = ui_state->edit_mode &&
-                  ((ui_state->menu_selected == DMR_TALKGROUP) ||
-                   (ui_state->menu_selected == DMR_RADIO_ID) ||
-                   (ui_state->menu_selected == DMR_PRIVATE_ID) ||
-                   (ui_state->menu_selected == DMR_APRS_ID));
-    dmrTgTyping = typing ? ui_state->new_dmr_tg : NULL;
+                  ui_isDMRIdSetting(ui_state->menu_selected);
+    dmrTyping = typing ? ui_state->new_dmr_tg : NULL;
+    dmrTypingRow = ui_state->menu_selected;
     _ui_drawMenuListValue(ui_state, ui_state->menu_selected,
                           _ui_getDMREntryName, _ui_getDMRValueName);
-    dmrTgTyping = NULL;
+    dmrTyping = NULL;
 }
 #endif
 
