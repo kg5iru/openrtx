@@ -77,6 +77,12 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot);
  */
 bool dmr_bsLocked();
 
+/**
+ * @return true when the last thing received was a terminator: a repeater
+ * that has just ended a call, which dmr_bsLocked() does not count as locked.
+ */
+bool dmr_bsTail();
+
 /** @return true while a transmission through a repeater waits for its slot. */
 bool dmr_txAligning();
 

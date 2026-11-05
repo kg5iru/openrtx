@@ -153,6 +153,8 @@ void OpMode_DMR::update(rtxStatus_t *const status, const bool newCfg)
         else if (status->dmrRadioId == 0)
             LOG_W("dmr", "PTT: no radio ID set (Settings > DMR)");
         else if ((status->dmrTimeslot != 0) && !bsLocked) {
+            if (dmr_bsTail())
+                LOG_I("dmr", "repeater ending a call: waking it up");
             wakeTries = 0;
             wakeStart = getTick();
             startWakeup(status);
@@ -339,8 +341,8 @@ void OpMode_DMR::updateWakeup(rtxStatus_t *const status, const bool ptt,
         if (wakeTries < WAKE_TRIES) {
             startWakeup(status);
         } else {
-            LOG_W("dmr", "no answer from the repeater after %u wake-ups",
-                  wakeTries);
+            LOG_W("dmr", "no answer from the repeater after %u wake-ups%s",
+                  wakeTries, dmr_bsTail() ? " (terminator received)" : "");
             wakePhase = WAKE_NONE;
         }
     }

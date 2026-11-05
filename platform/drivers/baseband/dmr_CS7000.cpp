@@ -146,6 +146,16 @@ static volatile bool dmrRunning = false;
 static uint8_t slotsSinceVoice = 0;
 
 static bool termSeen = false; // terminator read since the last voice burst
+/*
+ * A terminator was the last thing received: a repeater that has just ended a
+ * call may stop transmitting at any moment.  v51 on air: a call started on
+ * the repeater's timing right after the hotspot's terminators of the
+ * previous call was not repeated (14 s lost), while calls started during
+ * voice (the hotspot repeating the end of the own call, or another call on
+ * the other slot) were.  A duplex hotspot that has stopped transmitting
+ * only answers a wake-up, so after a terminator the PTT wakes it up again.
+ */
+static volatile bool bsTail = false;
 static uint8_t lastVoice[27];
 static bool haveLast = false;
 static bool voicePathOn = false;
@@ -359,6 +369,7 @@ static void pollVoicePort()
 
     slotsSinceVoice = 0;
     termSeen = false;
+    bsTail = false;
     if (callMuted() || slotPending) {
         callBursts++;
         return;
@@ -885,7 +896,11 @@ static void pollLinkControl(uint8_t r82, uint8_t r51)
         }
         callActive = true;
         slotsSinceVoice = 0;
-    } else if (term && callActive) {
+        bsTail = false;
+    } else if (term) {
+        bsTail = true;
+    }
+    if (term && callActive) {
         // The call ends unless voice follows within three slots.
         if (slotsSinceVoice < 17)
             slotsSinceVoice = 17;
@@ -1117,7 +1132,12 @@ bool dmr_bsLocked()
     lockCheckIrqs = irqs;
 
     return (rxTimeslot != 0) && tcLocked(&tc) && (slotsSinceSys <= 4)
-        && (lockStale < 2);
+        && (lockStale < 2) && !bsTail;
+}
+
+bool dmr_bsTail()
+{
+    return bsTail;
 }
 
 bool dmr_txAligning()
@@ -1157,6 +1177,7 @@ void dmr_startWakeup(uint32_t src)
     tcReset(&tc);
     txIsWake = true;
     txWakeLeft = 2;
+    bsTail = false;
     C6000.writeCfgRegister(0x40, 0xE3);
     txState = TX_WAKE;
 }
