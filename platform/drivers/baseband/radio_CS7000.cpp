@@ -397,6 +397,7 @@ void radio_enableTx()
             break;
 
         case OPMODE_M17:
+        case OPMODE_YSF:        // C4FM: the same baseband path as M17
             C6000.disableTones();
             C6000.startAnalogTx(TxAudioSource::LINE_IN, FmConfig::BW_25kHz);
             break;
@@ -410,7 +411,8 @@ void radio_enableTx()
             break;
     }
 
-    analogTx = (config->opMode == OPMODE_FM) || (config->opMode == OPMODE_M17);
+    analogTx = (config->opMode == OPMODE_FM) || (config->opMode == OPMODE_M17)
+            || (config->opMode == OPMODE_YSF);
     gpioDev_set(TX_PWR_EN);     // Enable TX PA
 
     radioStatus = TX;
