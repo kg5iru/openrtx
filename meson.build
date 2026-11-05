@@ -78,6 +78,11 @@ ysf_src = ['openrtx/src/protocols/YSF/Coding.cpp',
            'openrtx/src/protocols/YSF/FrameDecoder.cpp',
            'openrtx/src/protocols/YSF/Demodulator.cpp']
 
+# NXDN48 protocol layer (CS7000-PLUS NXDN mode, tests)
+nxdn_src = ['openrtx/src/protocols/NXDN/Coding.cpp',
+            'openrtx/src/protocols/NXDN/Frame.cpp',
+            'openrtx/src/protocols/NXDN/Demodulator.cpp']
+
 ##
 ## P25 (TIA-102 Phase 1) sources
 ##
@@ -1359,9 +1364,19 @@ ysf_demodulator_test = executable('ysf_demodulator_test',
                             sources : unit_test_src + ysf_src + ['tests/unit/YSF_demodulator.cpp'],
                             kwargs  : unit_test_opts)
 
+nxdn_frame_test = executable('nxdn_frame_test',
+                             sources : unit_test_src + nxdn_src + ['tests/unit/NXDN_frame.cpp'],
+                             kwargs  : unit_test_opts)
+
+nxdn_demodulator_test = executable('nxdn_demodulator_test',
+                                   sources : unit_test_src + nxdn_src + ['tests/unit/NXDN_demodulator.cpp'],
+                                   kwargs  : unit_test_opts)
+
 test('M17 Golay Unit Test',   m17_golay_test)
 test('YSF Frame Unit Test',   ysf_frame_test)
 test('YSF Demodulator Test',  ysf_demodulator_test)
+test('NXDN Frame Unit Test',  nxdn_frame_test)
+test('NXDN Demodulator Test', nxdn_demodulator_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
 test('M17 RRC Test',          m17_rrc_test)

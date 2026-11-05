@@ -1,0 +1,459 @@
+/*
+ * SPDX-FileCopyrightText: Copyright 2020-2026 OpenRTX Contributors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#include <cstdlib>
+#include <cmath>
+#include "protocols/NXDN/Coding.hpp"
+#include "protocols/NXDN/Demodulator.hpp"
+
+using namespace NXDN;
+
+constexpr std::array<float, 3> Demodulator::sfNum;
+constexpr std::array<float, 3> Demodulator::sfDen;
+
+// Correlation threshold, in units of the filtered |sample| (see below)
+static constexpr float CORR_SCALE = 34.0f;
+
+static std::array<int8_t, SYNC_SYMBOLS> syncSymbols()
+{
+    std::array<int8_t, SYNC_SYMBOLS> s;
+    for (size_t i = 0; i < SYNC_SYMBOLS; i++)
+        s[i] = SYNC_SYMBOLS_VALUES[i];
+    return s;
+}
+
+static inline void setSymbol(frame_t &frame, const size_t i,
+                             const int8_t symbol)
+{
+    // +3 = 01, +1 = 00, -1 = 10, -3 = 11
+    uint8_t dibit;
+    switch (symbol) {
+        case +3:
+            dibit = 0x01;
+            break;
+        case +1:
+            dibit = 0x00;
+            break;
+        case -1:
+            dibit = 0x02;
+            break;
+        default:
+            dibit = 0x03;
+            break;
+    }
+
+    size_t byte = i / 4;
+    uint8_t shift = 6 - (2 * (i % 4));
+    frame[byte] = (frame[byte] & ~(0x03 << shift)) | (dibit << shift);
+}
+
+Demodulator::Demodulator()
+    : rrc(rx_taps_24k), sync(syncSymbols()), sampleFilter(sfNum, sfDen)
+{
+    reset();
+}
+
+void Demodulator::reset()
+{
+    state = State::INIT;
+    demodIdx = 0;
+    newFrame = false;
+    inverted = false;
+    mu = 0.0f;
+    skipNext = false;
+    hist[0] = hist[1] = hist[2] = hist[3] = 0;
+    frameIndex = 0;
+    sampleIndex = 0;
+    samplingPoint = 0;
+    missedSyncs = 0;
+    framesInLock = 0;
+    syncErrors = 0;
+    realigning = false;
+    realigns = 0;
+    initCount = RX_SAMPLE_RATE / 50; // 20 ms for the filters
+    corrThreshold = 0.0f;
+    frames[0].fill(0);
+    frames[1].fill(0);
+
+    dcLevel = 0.0f;
+    rrc.reset();
+    correlator.reset();
+    sync.reset();
+    sampleFilter.reset();
+    devEstimator.init({ 0, 0 });
+}
+
+const frame_t &Demodulator::getFrame()
+{
+    newFrame = false;
+    return frames[demodIdx ^ 1];
+}
+
+bool Demodulator::isLocked() const
+{
+    return (state == State::LOCKED) || (state == State::SYNC_UPDATE)
+        || ((state == State::SYNCED) && realigning);
+}
+
+bool Demodulator::sample(const int16_t rawSample)
+{
+    /*
+     * Slow DC removal (time constant 85 ms, about 2 Hz): the DC block of
+     * the M17 and YSF demodulators (pole 0.995, 19 Hz) makes the baseline
+     * of this slower signal wander with the data, by a quarter of the
+     * distance between symbol levels.  What it leaves (a frequency offset
+     * not yet tracked) is measured on each sync word: the symbol
+     * thresholds are set around the middle of the outer levels.
+     */
+    float raw = static_cast<float>(rawSample);
+    dcLevel += (raw - dcLevel) * DC_GAIN;
+    float in = raw - dcLevel;
+    if (inverted)
+        in = -in;
+    int16_t smp = static_cast<int16_t>(rrc(in));
+
+    correlator.sample(smp);
+    corrThreshold = sampleFilter(std::abs(smp));
+
+    hist[0] = hist[1];
+    hist[1] = hist[2];
+    hist[2] = hist[3];
+    hist[3] = smp;
+
+    switch (state) {
+        case State::INIT:
+            if (initCount == 0)
+                state = State::UNLOCKED;
+            else
+                initCount -= 1;
+            break;
+
+        case State::UNLOCKED:
+            unlockedState();
+            break;
+
+        case State::SYNCED:
+            syncedState();
+            break;
+
+        case State::LOCKED:
+            lockedState(smp);
+            break;
+
+        case State::SYNC_UPDATE:
+            syncUpdateState();
+            break;
+    }
+
+    sampleIndex = (sampleIndex + 1) % SAMPLES_PER_SYMBOL;
+
+    return newFrame;
+}
+
+void Demodulator::unlockedState()
+{
+    /*
+     * A clean sync word correlates to 24.7 times the outer symbol level (8
+     * outer and 2 inner symbols), while the filtered |sample| of random
+     * symbols sits at about 2/3 of the outer level: trigger at about 92% of
+     * the ideal peak.
+     */
+    int32_t thresh = static_cast<int32_t>(corrThreshold * CORR_SCALE);
+    int8_t sign = sync.update(correlator, thresh, -thresh);
+    if (sign != 0) {
+        samplingPoint = sync.samplingIndex();
+
+        // A negative peak is the sync word of an inverted signal: flip the
+        // signal from now on, and the samples already in the correlator.
+        if (sign < 0)
+            inverted = !inverted;
+
+        state = State::SYNCED;
+    }
+}
+
+void Demodulator::syncedState()
+{
+    // The sync word samples, oldest first, from the correlator memory
+    int16_t syms[SYNC_SYMBOLS];
+    size_t n = 0;
+    const int16_t *data = correlator.data();
+    for (size_t i = 0; (i < SYNC_SAMPLES) && (n < SYNC_SYMBOLS); i++) {
+        size_t pos = (correlator.index() + i) % SYNC_SAMPLES;
+        if ((pos % SAMPLES_PER_SYMBOL) == samplingPoint) {
+            // Samples taken before the polarity decision are not flipped;
+            // on a realignment the decision is older than the sync word.
+            int16_t v = data[pos];
+            syms[n++] = (inverted && !realigning) ? -v : v;
+        }
+    }
+
+    // Outer deviation from the sync word's +-3 symbols only
+    int32_t pos = 0, neg = 0, np = 0, nn = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (SYNC_SYMBOLS_VALUES[i] == +3) {
+            pos += syms[i];
+            np++;
+        }
+        if (SYNC_SYMBOLS_VALUES[i] == -3) {
+            neg += syms[i];
+            nn++;
+        }
+    }
+
+    if ((n < SYNC_SYMBOLS) || (np == 0) || (nn == 0) || (pos <= 0)
+        || (neg >= 0)) {
+        syncFailed();
+        return;
+    }
+
+    devEstimator.init({ pos / np, neg / nn });
+
+    frame_t &frame = frames[demodIdx];
+    frameIndex = 0;
+    for (size_t i = 0; i < SYNC_SYMBOLS; i++)
+        quantize(syms[i]);
+
+    // A realignment moves a lock: only to an exact sync word
+    uint8_t errs = NXDN::syncErrors(frame);
+    if (errs <= (realigning ? 0 : SYNC_ERRORS_ACQ)) {
+        state = State::LOCKED;
+        missedSyncs = 0;
+        if (realigning)
+            realigns += 1; // a verified lock stays one
+        else
+            framesInLock = 0;
+        syncErrors = errs;
+        mu = 0.0f;
+        skipNext = false;
+        prevValue = 0.0f;
+        prevSymbol = 0;
+        realigning = false;
+    } else {
+        syncFailed();
+    }
+
+    /*
+     * The correlator is never reset outside reset(): its buffer index sets
+     * the sampling phase the synchronizer reports, which must stay in step
+     * with sampleIndex.  After a polarity change it holds samples of both
+     * signs for one sync word length, which only delays a new acquisition.
+     */
+}
+
+void Demodulator::syncFailed()
+{
+    if (realigning) {
+        // Not a sync word after all: back to the lock as it was
+        frames[demodIdx] = held.frame;
+        frameIndex = held.frameIndex;
+        samplingPoint = held.samplingPoint;
+        missedSyncs = held.missedSyncs;
+        mu = held.mu;
+        skipNext = held.skipNext;
+        prevValue = held.prevValue;
+        prevSymbol = held.prevSymbol;
+        devEstimator = held.devEstimator;
+        realigning = false;
+        state = State::LOCKED;
+        symbolStep(); // this sample went to the attempt
+        return;
+    }
+
+    state = State::UNLOCKED;
+    inverted = false;
+}
+
+int8_t Demodulator::quantize(const int16_t sample)
+{
+    auto outer = devEstimator.outerDeviation();
+    int32_t mid = (outer.first + outer.second) / 2;
+    int32_t step = (2 * (outer.first - outer.second)) / 6;
+    int8_t symbol;
+
+    if (sample > (mid + step))
+        symbol = +3;
+    else if (sample < (mid - step))
+        symbol = -3;
+    else if (sample > mid)
+        symbol = +1;
+    else
+        symbol = -1;
+
+    setSymbol(frames[demodIdx], frameIndex, symbol);
+    frameIndex += 1;
+    return symbol;
+}
+
+void Demodulator::lockedState(const int16_t sample)
+{
+    (void)sample;
+
+    /*
+     * Look for the sync word elsewhere too, once the lock has missed one: a
+     * transmitter that restarts its frame timing (a hotspot whose network
+     * stream ran dry for a moment) moves the frame boundary, and the lock
+     * would otherwise read misaligned frames until MAX_MISSED syncs were
+     * missed.  The sync word of the current frame, just behind us, is
+     * ignored; another one is verified as at acquisition and, if it holds,
+     * the lock moves there, dropping the frame being filled.  The polarity
+     * is already corrected: only a positive peak is a sync word.
+     */
+    int32_t thresh = static_cast<int32_t>(corrThreshold * CORR_SCALE);
+    bool peak = (sync.update(correlator, thresh, -thresh) > 0);
+
+    symbolStep();
+    if (state != State::LOCKED)
+        return; // frame completed
+
+    if (peak && (missedSyncs > 0)) {
+        size_t idx = frameIndex;
+        bool current = ((idx + 3) >= SYNC_SYMBOLS)
+                    && (idx <= (SYNC_SYMBOLS + 3));
+        if (!current) {
+            held.frame = frames[demodIdx];
+            held.frameIndex = frameIndex;
+            held.samplingPoint = samplingPoint;
+            held.missedSyncs = missedSyncs;
+            held.mu = mu;
+            held.skipNext = skipNext;
+            held.prevValue = prevValue;
+            held.prevSymbol = prevSymbol;
+            held.devEstimator = devEstimator;
+            samplingPoint = sync.samplingIndex();
+            realigning = true;
+            state = State::SYNCED;
+        }
+    }
+}
+
+/*
+ * One sample of the lock: a symbol is taken two samples after its base
+ * sampling point, from the four samples around it (see trackTiming).  Every
+ * sample of a lock goes through here, whatever state handles it, so that
+ * none is lost and none is taken twice: a symbol lost or taken twice slips
+ * the rest of the frame.
+ */
+void Demodulator::symbolStep()
+{
+    if (sampleIndex != ((samplingPoint + 2) % SAMPLES_PER_SYMBOL))
+        return;
+
+    if (skipNext) {
+        skipNext = false;
+        return;
+    }
+
+    int16_t value = interpolate();
+    int8_t symbol = quantize(value);
+    devEstimator.sample(value);
+    trackTiming(value, symbol);
+
+    if (frameIndex == FRAME_SYMBOLS) {
+        demodIdx ^= 1; // the completed frame becomes the ready one
+        frameIndex = 0;
+        newFrame = true;
+        state = State::SYNC_UPDATE;
+    }
+}
+
+void Demodulator::syncUpdateState()
+{
+    /*
+     * Frames are aligned on their own sync word, so the frame just completed
+     * starts with the sync that preceded its 182 other symbols.  The first
+     * frame of a lock holds the acquisition sync; from the second one on, a
+     * sync word with too many errors is a miss.  A lock just acquired is
+     * dropped on its first miss (noise can form one sync word, rarely two),
+     * a verified one after MAX_MISSED in a row.
+     */
+    const frame_t &ready = frames[demodIdx ^ 1];
+    uint8_t errs = NXDN::syncErrors(ready);
+
+    /*
+     * This sample follows the frame's last symbol: it is not a symbol, but
+     * if the timing moved later on that symbol it is the one to skip (see
+     * trackTiming).  Left set, the skip would drop the next real symbol.
+     */
+    skipNext = false;
+    bool valid = (errs <= SYNC_ERRORS);
+    syncErrors = errs;
+
+    if (framesInLock < 255)
+        framesInLock += 1;
+
+    if (valid) {
+        devEstimator.update();
+        missedSyncs = 0;
+        state = State::LOCKED;
+        return;
+    }
+
+    devEstimator.reinit();
+    missedSyncs += 1;
+
+    if ((framesInLock <= 2) || (missedSyncs >= MAX_MISSED)) {
+        state = State::UNLOCKED;
+        inverted = false;
+    } else {
+        state = State::LOCKED;
+    }
+}
+
+/*
+ * Symbol timing, as in the YSF demodulator: the sampling instant is a base
+ * sample plus a fraction mu, each symbol is interpolated (cubic, over the
+ * samples base-1 .. base+2) two samples after its base, and the instant is
+ * tracked on every symbol by a decision-directed Mueller and Mueller
+ * detector.  At 10 samples per symbol a sample is a tenth of a symbol, half
+ * the YSF step: the loop gain is doubled for the same bandwidth.
+ */
+int16_t Demodulator::interpolate() const
+{
+    // hist[0..3] = samples at base-1, base, base+1, base+2
+    float x = mu;
+    float p0 = hist[0], p1 = hist[1], p2 = hist[2], p3 = hist[3];
+    float a = -p0 / 6.0f + p1 / 2.0f - p2 / 2.0f + p3 / 6.0f;
+    float b = p0 / 2.0f - p1 + p2 / 2.0f;
+    float c = -p0 / 3.0f - p1 / 2.0f + p2 - p3 / 6.0f;
+    float v = ((a * x + b) * x + c) * x + p1;
+    return static_cast<int16_t>(v);
+}
+
+void Demodulator::trackTiming(const int16_t value, const int8_t symbol)
+{
+    auto outer = devEstimator.outerDeviation();
+    float scale = 0.5f * static_cast<float>(outer.first - outer.second);
+    if (scale <= 0.0f)
+        return;
+
+    // Value in symbol units (+-1, +-3); the error is about -1 per sample of
+    // lateness, averaged over random data.
+    float mid = 0.5f * static_cast<float>(outer.first + outer.second);
+    float y = 3.0f * (static_cast<float>(value) - mid) / scale;
+    float e = (static_cast<float>(prevSymbol) * y)
+            - (static_cast<float>(symbol) * prevValue);
+    prevValue = y;
+    prevSymbol = symbol;
+
+    if (e > 10.0f)
+        e = 10.0f;
+    if (e < -10.0f)
+        e = -10.0f;
+    mu += TIMING_GAIN * e;
+
+    // Move the base when the fraction leaves [0, 1).  Moved later, the new
+    // base + 2 comes round again before the next symbol's: skip it once.
+    if (mu >= 1.0f) {
+        mu -= 1.0f;
+        samplingPoint = (samplingPoint + 1) % SAMPLES_PER_SYMBOL;
+        skipNext = true;
+    } else if (mu < 0.0f) {
+        mu += 1.0f;
+        samplingPoint = (samplingPoint + SAMPLES_PER_SYMBOL - 1)
+                      % SAMPLES_PER_SYMBOL;
+    }
+}
