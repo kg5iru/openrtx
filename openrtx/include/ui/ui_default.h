@@ -157,7 +157,8 @@ enum settingsDMRItems
     DMR_COLOUR_CODE = 0,
     DMR_TIMESLOT,
     DMR_TALKGROUP,
-    DMR_RADIO_ID
+    DMR_RADIO_ID,
+    DMR_MIC_GAIN
 };
 #endif
 

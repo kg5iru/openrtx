@@ -186,7 +186,8 @@ const char *settings_dmr_items[] =
     "Colour Code",
     "Timeslot",
     "Talkgroup",
-    "Radio ID"
+    "Radio ID",
+    "Mic Gain"
 };
 #endif
 
@@ -2508,7 +2509,21 @@ void ui_updateFSM(bool *sync_rtx)
             case SETTINGS_DMR:
                 if(ui_state.edit_mode)
                 {
-                    if(ui_state.menu_selected == DMR_TIMESLOT)
+                    if(ui_state.menu_selected == DMR_MIC_GAIN)
+                    {
+                        uint8_t g = settings_dmrMicGainStep(&state.settings);
+                        if((msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
+                            msg.keys & KEY_LEFT) && (g > 0))
+                            settings_setDmrMicGainStep(&state.settings, g - 1);
+                        else if((msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
+                                 msg.keys & KEY_RIGHT) &&
+                                (g < (DMR_MIC_GAIN_STEPS - 1)))
+                            settings_setDmrMicGainStep(&state.settings, g + 1);
+                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        *sync_rtx = true;
+                    }
+                    else if(ui_state.menu_selected == DMR_TIMESLOT)
                     {
                         // Any -> 1 -> 2 -> Any
                         uint8_t ts = settings_dmrTimeslot(&state.settings);
@@ -2590,6 +2605,16 @@ void ui_updateFSM(bool *sync_rtx)
                     uint8_t cc = settings_dmrColourCode(&state.settings);
                     cc += (msg.keys & KEY_RIGHT) ? 1 : 15;
                     settings_setDmrColourCode(&state.settings, cc);
+                    *sync_rtx = true;
+                }
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_MIC_GAIN))
+                {
+                    uint8_t g = settings_dmrMicGainStep(&state.settings);
+                    if((msg.keys & KEY_RIGHT) && (g < (DMR_MIC_GAIN_STEPS - 1)))
+                        settings_setDmrMicGainStep(&state.settings, g + 1);
+                    else if((msg.keys & KEY_LEFT) && (g > 0))
+                        settings_setDmrMicGainStep(&state.settings, g - 1);
                     *sync_rtx = true;
                 }
                 else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&

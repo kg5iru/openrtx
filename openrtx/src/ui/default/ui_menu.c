@@ -485,6 +485,14 @@ int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
             break;
         }
 
+        case DMR_MIC_GAIN:
+        {
+            int db = (3 * (int) settings_dmrMicGainStep(&last_state.settings))
+                   - 12;
+            sniprintf(buf, max_len, "%+d dB", db);
+            break;
+        }
+
         case DMR_RADIO_ID:
             if(dmrTgTyping != NULL)
                 sniprintf(buf, max_len, "%s_", dmrTgTyping);
