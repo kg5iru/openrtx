@@ -8,6 +8,7 @@
 #define DMR_CS7000_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -85,6 +86,24 @@ void dmr_setRxTimeslot(uint8_t ts);
  */
 void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
                  const char *alias);
+
+/**
+ * Start a data call (an unconfirmed packet: preamble CSBKs, data header,
+ * rate 1/2 blocks), the same way as dmr_startTx(): through a repeater the
+ * repeater's timing must be locked and the caller keys the RF chain after
+ * this call, in direct mode before it.  dmr_txDone() tells when it is out.
+ *
+ * @param src: own radio ID.
+ * @param dst: destination ID.
+ * @param timeslot: 0 for direct mode, 1 or 2 through a repeater.
+ * @param privateCall: true for an individual call, false for a group.
+ * @param msg: the packet, from the compressed UDP/IP header (SAP 3) on;
+ * the driver adds the padding and the CRC-32.
+ * @param len: its length, up to 9 blocks of 12 bytes less the CRC.
+ * @return false when the packet is too long.
+ */
+bool dmr_startData(uint32_t src, uint32_t dst, uint8_t timeslot,
+                   bool privateCall, const uint8_t *msg, size_t len);
 
 /**
  * @return true when the receiver follows a repeater's signal: the CACH

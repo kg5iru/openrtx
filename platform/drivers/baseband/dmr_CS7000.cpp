@@ -537,6 +537,8 @@ enum : uint8_t {
     TX_WAKE,      ///< Repeater wake-up CSBK to arm
     TX_WAKE_SENT, ///< Wake-up armed, going out in this slot
     TX_ALIGN,     ///< Through a repeater: waiting for the own slot
+    TX_DATA,      ///< Data call: next burst of txData to arm
+    TX_DATA_END,  ///< Data call: last burst armed
 };
 
 static constexpr uint8_t TX_HEADERS = 3;
@@ -619,7 +621,28 @@ static volatile uint8_t slotsSinceSys = 255;
 static uint32_t lockCheckIrqs = 0; // rxSlotIrqsTotal at the last check
 static uint8_t lockStale = 255;    // checks in a row without a slot interrupt
 static uint8_t txWakeLeft = 0;     // wake-up CSBKs still to send
-static bool txIsWake = false;      // the transmission is a wake-up
+
+/*
+ * Data call (GPS position for APRS), as the owner's Anytone sends it (v55
+ * off-air capture, private call to 310999 on TS2 after a wake-up):
+ * - 5 preamble CSBKs: bd 00 80 <bursts to follow> <dst> <src> + CRC;
+ * - an unconfirmed data header: 02 <SAP 3 | pad octets> <dst> <src>
+ *   <0x80 | blocks> 00 + CRC;
+ * - rate 1/2 data blocks of 12 bytes: a compressed UDP/IPv4 header (ETSI
+ *   TS 102 361-3, SAP 3: IPv4 ID, then ports 10110 / 10110), an NMEA
+ *   $GPRMC sentence, zero padding and the CRC-32 of the whole message.
+ * The CRCs are those of ETSI TS 102 361-1 B.3 (checked on the capture):
+ * CCITT with the header (0xCCCC) and CSBK (0xA5A5) masks, CRC-32 over the
+ * bytes taken in swapped pairs, sent least significant byte first.
+ */
+#define TX_DATA_MAX 16
+static uint8_t txData[TX_DATA_MAX][12];
+static uint8_t txDataType[TX_DATA_MAX]; // reg 0x50 value
+static uint8_t txDataCount = 0;
+static uint8_t txDataIdx = 0;
+static bool txIsData = false;
+static constexpr uint8_t DATA_PREAMBLES = 5;
+static bool txIsWake = false; // the transmission is a wake-up
 
 static void tcUpdate(TcTrack *t, uint8_t bit)
 {
@@ -716,6 +739,9 @@ static void handleTxSlot()
             C6000.writeCfgRegister(0x21, 0x03);
             C6000.writeCfgRegister(0x41, 0x40);
             txState = TX_DONE;
+        } else if (txState == TX_DATA_END) {
+            C6000.writeCfgRegister(0x41, 0x00);
+            txState = TX_DONE;
         } else {
             C6000.writeCfgRegister(0x41, 0x00);
         }
@@ -723,6 +749,15 @@ static void handleTxSlot()
     }
 
     switch (txState) {
+        case TX_DATA:
+            dmrDiag_set(DIAG_STAGE, STAGE_VOICE);
+            C6000.writeCfgRegister(0x41, 0x80);
+            C6000.writeTxBurst(0x00, txData[txDataIdx], 12);
+            C6000.writeCfgRegister(0x50, txDataType[txDataIdx]);
+            if (++txDataIdx >= txDataCount)
+                txState = TX_DATA_END;
+            break;
+
         case TX_HEADER:
             dmrDiag_set(DIAG_STAGE, STAGE_HEADER);
             C6000.writeCfgRegister(0x41, 0x80);
@@ -794,7 +829,7 @@ static void handleSlot()
                     C6000.writeCfgRegister(0x41, 0x00);
                     txState = TX_DONE;
                 } else if (tc.local == txTcIdx) {
-                    txState = TX_HEADER;
+                    txState = txIsData ? TX_DATA : TX_HEADER;
                     txArmSlot = false; // handleTxSlot() arms in this slot
                     handleTxSlot();
                 } else {
@@ -1191,55 +1226,55 @@ static void txReset()
     txSuperframe = 0;
     txSfLc = txLc;
     txIsWake = false;
+    txIsData = false;
+    txDataIdx = 0;
 }
 
-void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
-                 const char *alias)
+// CRC-CCITT of DMR (ETSI TS 102 361-1 B.3.7): initial 0, inverted, masked
+static void setCrc16(uint8_t b[12], uint16_t mask)
 {
-    if (callActive)
-        endCall("transmit");
-
-    // Voice call link control: FLCO 0 (group) or 3 (unit to unit), FID 0,
-    // no service options, destination and source IDs big-endian (as read on
-    // receive)
-    txLc[0] = privateCall ? 0x03 : 0x00;
-    txLc[1] = 0x00;
-    txLc[2] = 0x00;
-    txLc[3] = (dst >> 16) & 0xFF;
-    txLc[4] = (dst >> 8) & 0xFF;
-    txLc[5] = dst & 0xFF;
-    txLc[6] = (src >> 16) & 0xFF;
-    txLc[7] = (src >> 8) & 0xFF;
-    txLc[8] = src & 0xFF;
-
-    txReset();
-    txTimeslot = (timeslot > 2) ? 0 : timeslot;
-
-    // Talker alias blocks
-    size_t len = 0;
-    if (alias != NULL)
-        while ((len < 27) && (alias[len] != '\0'))
-            len++;
-    while ((len > 0) && (alias[len - 1] == ' '))
-        len--;
-    for (int b = 0; b < 4; b++)
-        for (int i = 0; i < 9; i++)
-            txTa[b][i] = 0x00;
-    txTaBlocks = 0;
-    if (len > 0) {
-        txTa[0][0] = 0x04;
-        txTa[0][2] = (uint8_t)((0x01 << 6) | (len << 1));
-        for (size_t i = 0; i < len; i++) {
-            if (i < 6)
-                txTa[0][3 + i] = (uint8_t)alias[i];
-            else
-                txTa[1 + ((i - 6) / 7)][2 + ((i - 6) % 7)] = (uint8_t)alias[i];
-        }
-        txTaBlocks = (len <= 6) ? 1 : (uint8_t)(1 + ((len - 6 + 6) / 7));
-        for (int b = 1; b < txTaBlocks; b++)
-            txTa[b][0] = (uint8_t)(0x04 + b);
+    uint16_t c = 0;
+    for (int i = 0; i < 10; i++) {
+        c ^= (uint16_t)(b[i] << 8);
+        for (int k = 0; k < 8; k++)
+            c = (c & 0x8000) ? (uint16_t)((c << 1) ^ 0x1021) :
+                               (uint16_t)(c << 1);
     }
+    c = (uint16_t)(c ^ 0xFFFF ^ mask);
+    b[10] = (uint8_t)(c >> 8);
+    b[11] = (uint8_t)(c & 0xFF);
+}
 
+// CRC-32 of DMR packet data (B.3.10): bytes in swapped pairs, MSB first
+static uint32_t crc32Data(const uint8_t *buf, size_t len)
+{
+    uint32_t c = 0;
+    for (size_t i = 0; i < len; i++) {
+        uint8_t b = buf[i ^ 1];
+        for (int k = 7; k >= 0; k--) {
+            uint32_t fb = ((c >> 31) ^ (uint32_t)(b >> k)) & 1;
+            c <<= 1;
+            if (fb)
+                c ^= 0x04C11DB7;
+        }
+    }
+    return c;
+}
+
+static void putId(uint8_t *p, uint32_t id)
+{
+    p[0] = (id >> 16) & 0xFF;
+    p[1] = (id >> 8) & 0xFF;
+    p[2] = id & 0xFF;
+}
+
+/*
+ * Common start of a transmission, voice or data, once txTimeslot and the
+ * content are set: through a repeater the first burst waits for the own
+ * slot (TX_ALIGN), in direct mode the chip makes its own slot timing.
+ */
+static void txBegin(uint32_t src, uint32_t dst, const char *what)
+{
     if (txTimeslot != 0) {
         /*
          * Through a repeater: the slot timing comes from its signal.  The
@@ -1254,8 +1289,7 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
         C6000.writeCfgRegister(0x56, 0x10);
         C6000.writeCfgRegister(0x40, 0xC3);
         LOG_I("dmr", "tx start: src %lu %s %lu, through the repeater on TS%u",
-              (unsigned long)src, privateCall ? "private to" : "dst",
-              (unsigned long)dst, txTimeslot);
+              (unsigned long)src, what, (unsigned long)dst, txTimeslot);
         rxSlotIrqs = 0;
         dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
         txState = TX_ALIGN; // last: the slot interrupt starts from here
@@ -1280,11 +1314,12 @@ void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
     LOG_I("dmr",
           "tx start: src %lu %s %lu, %lu slot interrupts since the "
           "last one",
-          (unsigned long)src, privateCall ? "private to" : "dst",
-          (unsigned long)dst, (unsigned long)rxSlotIrqs);
+          (unsigned long)src, what, (unsigned long)dst,
+          (unsigned long)rxSlotIrqs);
     rxSlotIrqs = 0;
     dmrDiag_set(DIAG_STAGE, STAGE_STARTED);
-    txState = TX_HEADER; // last: the slot interrupt starts from here
+    // last: the slot interrupt starts from here
+    txState = txIsData ? TX_DATA : TX_HEADER;
 }
 
 bool dmr_bsLocked()
@@ -1348,6 +1383,118 @@ void dmr_startWakeup(uint32_t src)
     txState = TX_WAKE;
 }
 
+void dmr_startTx(uint32_t src, uint32_t dst, uint8_t timeslot, bool privateCall,
+                 const char *alias)
+{
+    if (callActive)
+        endCall("transmit");
+
+    // Voice call link control: FLCO 0 (group) or 3 (unit to unit), FID 0,
+    // no service options, destination and source IDs big-endian (as read on
+    // receive)
+    txLc[0] = privateCall ? 0x03 : 0x00;
+    txLc[1] = 0x00;
+    txLc[2] = 0x00;
+    txLc[3] = (dst >> 16) & 0xFF;
+    txLc[4] = (dst >> 8) & 0xFF;
+    txLc[5] = dst & 0xFF;
+    txLc[6] = (src >> 16) & 0xFF;
+    txLc[7] = (src >> 8) & 0xFF;
+    txLc[8] = src & 0xFF;
+
+    txReset();
+    txTimeslot = (timeslot > 2) ? 0 : timeslot;
+
+    // Talker alias blocks
+    size_t len = 0;
+    if (alias != NULL)
+        while ((len < 27) && (alias[len] != '\0'))
+            len++;
+    while ((len > 0) && (alias[len - 1] == ' '))
+        len--;
+    for (int b = 0; b < 4; b++)
+        for (int i = 0; i < 9; i++)
+            txTa[b][i] = 0x00;
+    txTaBlocks = 0;
+    if (len > 0) {
+        txTa[0][0] = 0x04;
+        txTa[0][2] = (uint8_t)((0x01 << 6) | (len << 1));
+        for (size_t i = 0; i < len; i++) {
+            if (i < 6)
+                txTa[0][3 + i] = (uint8_t)alias[i];
+            else
+                txTa[1 + ((i - 6) / 7)][2 + ((i - 6) % 7)] = (uint8_t)alias[i];
+        }
+        txTaBlocks = (len <= 6) ? 1 : (uint8_t)(1 + ((len - 6 + 6) / 7));
+        for (int b = 1; b < txTaBlocks; b++)
+            txTa[b][0] = (uint8_t)(0x04 + b);
+    }
+
+    txBegin(src, dst, privateCall ? "private to" : "dst");
+}
+
+bool dmr_startData(uint32_t src, uint32_t dst, uint8_t timeslot,
+                   bool privateCall, const uint8_t *msg, size_t len)
+{
+    // Blocks of 12 bytes: the message, zero padding, the CRC-32
+    size_t total = len + 4;
+    size_t pad = (12 - (total % 12)) % 12;
+    size_t blocks = (total + pad) / 12;
+    if ((DATA_PREAMBLES + 1 + blocks) > TX_DATA_MAX)
+        return false;
+
+    if (callActive)
+        endCall("transmit");
+
+    txReset();
+    txTimeslot = (timeslot > 2) ? 0 : timeslot;
+
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < DATA_PREAMBLES; i++, n++) {
+        uint8_t *b = txData[n];
+        b[0] = 0xBD; // last block, preamble CSBK (opcode 0x3D)
+        b[1] = 0x00;
+        b[2] = privateCall ? 0x80 : 0xC0; // data follows; group bit
+        b[3] = (uint8_t)((DATA_PREAMBLES - 1 - i) + 1 + blocks);
+        putId(&b[4], dst);
+        putId(&b[7], src);
+        setCrc16(b, 0xA5A5);
+        txDataType[n] = 0x30;
+    }
+
+    // Unconfirmed data header: SAP 3 (UDP/IPv4 compressed header)
+    uint8_t *h = txData[n];
+    h[0] = (uint8_t)((privateCall ? 0x00 : 0x80) | ((pad & 0x10) ? 0x10 : 0)
+                     | 0x02);
+    h[1] = (uint8_t)(0x30 | (pad & 0x0F));
+    putId(&h[2], dst);
+    putId(&h[5], src);
+    h[8] = (uint8_t)(0x80 | blocks);
+    h[9] = 0x00;
+    setCrc16(h, 0xCCCC);
+    txDataType[n] = 0x60;
+    n++;
+
+    // Rate 1/2 blocks
+    uint8_t *d = txData[n];
+    size_t bytes = blocks * 12;
+    for (size_t i = 0; i < bytes; i++)
+        d[i] = (i < len) ? msg[i] : 0x00;
+    uint32_t crc = crc32Data(d, bytes - 4);
+    d[bytes - 4] = crc & 0xFF;
+    d[bytes - 3] = (crc >> 8) & 0xFF;
+    d[bytes - 2] = (crc >> 16) & 0xFF;
+    d[bytes - 1] = (crc >> 24) & 0xFF;
+    for (size_t i = 0; i < blocks; i++)
+        txDataType[n + i] = 0x70;
+    n += blocks;
+
+    txDataCount = n;
+    txIsData = true;
+    txBegin(src, dst, privateCall ? "data to" : "group data to");
+    return true;
+}
+
 uint32_t dmr_rxSlotIrqs()
 {
     return rxSlotIrqsTotal;
@@ -1399,7 +1546,8 @@ void dmr_endTx(uint32_t elapsedMs)
     txState = TX_OFF;
 
     // A transmission that never found its slot has lost the repeater
-    bool keepAxis = (txTimeslot != 0) && !txIsWake && (txHeaders != TX_HEADERS);
+    bool started = txIsData ? (txDataIdx > 0) : (txHeaders != TX_HEADERS);
+    bool keepAxis = (txTimeslot != 0) && !txIsWake && started;
 
     if (keepAxis) {
         /*
@@ -1432,6 +1580,13 @@ void dmr_endTx(uint32_t elapsedMs)
 
     if (txIsWake) {
         LOG_I("dmr", "wake-up %s", clean ? "sent" : "not sent (aborted)");
+        return;
+    }
+
+    if (txIsData) {
+        LOG_I("dmr", "data %s: %u of %u bursts, %lu ms",
+              clean ? "sent" : "aborted", txDataIdx, txDataCount,
+              (unsigned long)elapsedMs);
         return;
     }
 
