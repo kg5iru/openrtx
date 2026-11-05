@@ -512,6 +512,13 @@ int _ui_getDMRValueName(char *buf, uint8_t max_len, uint8_t index)
                 sniprintf(buf, max_len, "%lu",
                           (unsigned long) last_state.settings.dmr_privId);
             break;
+        case DMR_MONITOR:
+        {
+            static const char *modes[] = { "Off", "Single TS", "Any TS" };
+            sniprintf(buf, max_len, "%s",
+                      modes[settings_dmrMonitor(&last_state.settings)]);
+            break;
+        }
         case DMR_TALKER_ALIAS:
             sniprintf(buf, max_len, "%s",
                       (last_state.settings.dmr_taOff == 0) ? "On" : "Off");

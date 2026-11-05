@@ -160,7 +160,8 @@ enum settingsDMRItems
     DMR_RADIO_ID,
     DMR_MIC_GAIN,
     DMR_PRIVATE_ID,
-    DMR_TALKER_ALIAS
+    DMR_TALKER_ALIAS,
+    DMR_MONITOR
 };
 #endif
 

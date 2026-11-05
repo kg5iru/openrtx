@@ -189,7 +189,8 @@ const char *settings_dmr_items[] =
     "Radio ID",
     "Mic Gain",
     "Private Call",
-    "Talker Alias"
+    "Talker Alias",
+    "Monitor"
 };
 #endif
 
@@ -2539,6 +2540,20 @@ void ui_updateFSM(bool *sync_rtx)
                             ui_state.edit_mode = false;
                         *sync_rtx = true;
                     }
+                    else if(ui_state.menu_selected == DMR_MONITOR)
+                    {
+                        // Off -> Single TS -> Any TS -> Off
+                        uint8_t m = settings_dmrMonitor(&state.settings);
+                        if(msg.keys & KEY_DOWN || msg.keys & KNOB_LEFT ||
+                           msg.keys & KEY_LEFT)
+                            state.settings.dmr_monitor = (m + 2) % 3;
+                        else if(msg.keys & KEY_UP || msg.keys & KNOB_RIGHT ||
+                                msg.keys & KEY_RIGHT)
+                            state.settings.dmr_monitor = (m + 1) % 3;
+                        else if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
+                            ui_state.edit_mode = false;
+                        *sync_rtx = true;
+                    }
                     else if(ui_state.menu_selected == DMR_TALKER_ALIAS)
                     {
                         if(msg.keys & KEY_ENTER || msg.keys & KEY_ESC)
@@ -2632,6 +2647,14 @@ void ui_updateFSM(bool *sync_rtx)
                         settings_setDmrMicGainStep(&state.settings, g + 1);
                     else if((msg.keys & KEY_LEFT) && (g > 0))
                         settings_setDmrMicGainStep(&state.settings, g - 1);
+                    *sync_rtx = true;
+                }
+                else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
+                        (ui_state.menu_selected == DMR_MONITOR))
+                {
+                    uint8_t m = settings_dmrMonitor(&state.settings);
+                    m += (msg.keys & KEY_RIGHT) ? 1 : 2;
+                    state.settings.dmr_monitor = m % 3;
                     *sync_rtx = true;
                 }
                 else if((msg.keys & KEY_RIGHT || msg.keys & KEY_LEFT) &&
