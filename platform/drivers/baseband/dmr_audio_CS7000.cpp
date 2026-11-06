@@ -562,13 +562,16 @@ static void *encodeThread(void *arg)
     txPeak = 0;
 
     const char *vocoder = txImbe ? "IMBE" : "AMBE+2";
+    bool usbSource = false;
 #ifdef CONFIG_USB_AUDIO_CS7000
-    if (txFromUsb) {
+    usbSource = txFromUsb;
+#endif
+    if (usbSource) {
+#ifdef CONFIG_USB_AUDIO_CS7000
         LOG_I("ambe", "encode thread started (USB audio, %s)", vocoder);
         encodeUsb();
-    } else
 #endif
-    if (txMicPath >= 0) {
+    } else if (txMicPath >= 0) {
         LOG_I("ambe", "encode thread started (microphone, %s)", vocoder);
         encodeMic();
     } else {
