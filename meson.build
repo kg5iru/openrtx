@@ -654,6 +654,7 @@ if get_option('cs7000_ambe')
 endif
 
 # System log over USB: USB CDC-ACM driver, rtxlink framing and the log core.
+# The USB device also carries a CAT port and a sound card.
 # About 5 kB of flash and 12 kB of RAM (log thread stack included); see
 # openrtx/include/core/log.h
 if get_option('rtxlink_log')
@@ -662,6 +663,10 @@ if get_option('rtxlink_log')
                   'openrtx/src/core/rtxlink.c',
                   'openrtx/src/core/log.c']
   cs7000p_def += {'CONFIG_LOG': ''}
+
+  # CAT control (Kenwood TS-2000 dialect) on the second USB serial port
+  cs7000p_src += ['openrtx/src/core/cat.c', 'openrtx/src/core/cat_radio.c']
+  cs7000p_def += {'CONFIG_CAT': ''}
 endif
 
 cs7000p_src += openrtx_src + stm32h743_src + miosix_cm7_src + ui_src_default

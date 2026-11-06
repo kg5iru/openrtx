@@ -19,6 +19,10 @@
 #include "core/log.h"
 #ifdef CONFIG_LOG
 #include "usb_cdc.h"
+#ifdef CONFIG_CAT
+#include "core/cat.h"
+#include "usb_audio.h"
+#endif
 #endif
 
 static const hwInfo_t hwInfo =
@@ -59,6 +63,18 @@ static void startLog()
 
     if(ret < 0)
         LOG_E("boot", "USB port init failed (%d), log stays in RAM", ret);
+
+    #ifdef CONFIG_CAT
+    // Second port of the same USB device, already started
+    cat_init(&usb_cat_chardev, &cat_radio);
+    #endif
+}
+#endif
+
+#ifdef CONFIG_CAT
+void cat_portSetPtt(bool on)
+{
+    usbAudio_setPtt(on);
 }
 #endif
 
@@ -189,7 +205,15 @@ bool platform_getPttStatus()
     /* PTT line has a pullup resistor with PTT switch closing to ground */
     uint8_t intPttStatus = gpio_readPin(PTT_SW);
     uint8_t extPttStatus = gpio_readPin(PTT_EXT);
-    return ((intPttStatus == 0) || (extPttStatus == 0)) ? true : false;
+    if((intPttStatus == 0) || (extPttStatus == 0))
+        return true;
+
+    #ifdef CONFIG_CAT
+    // Transmit request from a computer, over USB (CAT)
+    return usbAudio_ptt();
+    #else
+    return false;
+    #endif
 }
 
 bool platform_pwrButtonStatus()
