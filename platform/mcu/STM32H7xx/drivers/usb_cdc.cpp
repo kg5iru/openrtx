@@ -5,11 +5,19 @@
  */
 
 /*
- * USB CDC-ACM device on the STM32H743 USB2 OTG_FS core (Synopsys DWC2),
- * register level, slave mode (no DMA), no external USB stack.
+ * Composite USB device on the STM32H743 USB2 OTG_FS core (Synopsys DWC2),
+ * register level, slave mode (no DMA), no external USB stack:
  *
- * Endpoints: EP0 control, EP1 OUT/IN bulk 64 bytes (data), EP2 IN interrupt
- * 8 bytes (CDC notifications, declared but never used).
+ * - two CDC-ACM serial ports: the system log (rtxlink) and CAT control;
+ * - a USB Audio Class 1.0 sound card, 48 kHz mono 16 bit both ways
+ *   (usb_audio.h).
+ *
+ * Interfaces and endpoints:
+ *   0, 1  log port    EP2 IN interrupt (notifications, unused), EP1 bulk
+ *   2, 3  CAT port    EP4 IN interrupt (notifications, unused), EP3 bulk
+ *   4     audio control (two feature units: volume and mute)
+ *   5     audio to the radio    (alt 1: EP5 OUT isochronous, adaptive)
+ *   6     audio from the radio  (alt 1: EP5 IN isochronous, asynchronous)
  *
  * All endpoint and FIFO access happens either in the interrupt handler or
  * with interrupts disabled, so the core never sees interleaved FIFO writes.
@@ -18,11 +26,13 @@
  */
 
 #include "usb_cdc.h"
+#include "usb_audio.h"
 #include "peripherals/gpio.h"
 #include "interfaces/delays.h"
 #include "stm32h7xx.h"
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 
 #define USB_BASE USB2_OTG_FS_PERIPH_BASE
 #define CORE USB2_OTG_FS
@@ -42,15 +52,25 @@
 #define EP0_SIZE 64
 #define DATA_SIZE 64
 #define NOTIF_SIZE 8
+#define NUM_EPS 6 // EP0 .. EP5
+
+#define AUDIO_EP 5
+#define AUDIO_MPS 100 // bytes: up to 50 samples per frame
+#define AUDIO_RATE 48000
 
 // FIFO RAM layout, in 32-bit words (4 KiB = 1024 words available)
-#define RX_FIFO_WORDS 128
+#define RX_FIFO_WORDS 256
 #define TX0_FIFO_WORDS 64
-#define TX1_FIFO_WORDS 128
+#define TX1_FIFO_WORDS 128 // log port data
 #define TX2_FIFO_WORDS 16
+#define TX3_FIFO_WORDS 32  // CAT port data
+#define TX4_FIFO_WORDS 16
+#define TX5_FIFO_WORDS 64  // audio: two packets
 
-#define TX_RING_SIZE 2048 // powers of two
-#define RX_RING_SIZE 256
+#define LOG_TX_RING 2048   // powers of two
+#define LOG_RX_RING 256
+#define CAT_TX_RING 512
+#define CAT_RX_RING 256
 
 #define USB_VID 0x0483
 #define USB_PID 0x5740
@@ -59,87 +79,203 @@
 #define PKT_OUT_DATA 2
 #define PKT_SETUP_DATA 6
 
-// Interrupt flags handled by the driver
+// Interrupt flags handled by the driver (SOF is added while audio streams)
 #define GINT_MASK                                        \
     (USB_OTG_GINTMSK_USBRST | USB_OTG_GINTMSK_ENUMDNEM   \
      | USB_OTG_GINTMSK_RXFLVLM | USB_OTG_GINTMSK_OEPINT  \
      | USB_OTG_GINTMSK_IEPINT | USB_OTG_GINTMSK_USBSUSPM \
-     | USB_OTG_GINTMSK_WUIM)
+     | USB_OTG_GINTMSK_WUIM | USB_OTG_GINTMSK_IISOIXFRM  \
+     | USB_OTG_GINTMSK_PXFRM_IISOOXFRM)
 
 enum Ep0State {
     EP0_IDLE,     // waiting for SETUP
     EP0_DATA_IN,  // sending the data stage
-    EP0_DATA_OUT, // receiving the data stage (SET_LINE_CODING)
+    EP0_DATA_OUT, // receiving the data stage
     EP0_STATUS    // status stage in progress
 };
+
+// Descriptors --------------------------------------------------------------
 
 static const uint8_t devDesc[] = {
     18,
     1,    // bLength, DEVICE
     0x00,
     0x02, // USB 2.0
+    0xEF,
     0x02,
-    0x00,
-    0x00, // class CDC, no subclass, no protocol
+    0x01, // miscellaneous, common class, interface association
     EP0_SIZE,
     USB_VID & 0xFF,
     USB_VID >> 8,
     USB_PID & 0xFF,
     USB_PID >> 8,
     0x00,
-    0x01, // bcdDevice 1.00
+    0x02, // bcdDevice 2.00: composite (1.00 was the log port alone)
     1,
     2,
     3, // manufacturer, product, serial strings
     1  // one configuration
 };
 
+// String indexes
+#define STR_LOG 4
+#define STR_CAT 5
+#define STR_AUDIO 6
+
+/*
+ * One CDC-ACM function: interface association, communication interface with
+ * its notification endpoint, data interface with the bulk endpoints.
+ */
+#define CDC_FUNCTION_LEN 66
+#define CDC_FUNCTION(commIf, notifEp, dataEp, str)                            \
+    8, 11, (commIf), 2, 0x02, 0x02, 0x01, (str),       /* IAD */              \
+        9, 4, (commIf), 0, 1, 0x02, 0x02, 0x01, (str), /* comm interface */   \
+        5, 0x24, 0x00, 0x10, 0x01,                     /* header, CDC 1.10 */ \
+        5, 0x24, 0x01, 0x00, (commIf) + 1,             /* call management */  \
+        4, 0x24, 0x02, 0x02,                           /* ACM */              \
+        5, 0x24, 0x06, (commIf), (commIf) + 1,         /* union */            \
+        7, 5, 0x80 | (notifEp), 0x03, NOTIF_SIZE, 0, 16, 9, 4, (commIf) + 1,  \
+        0, 2, 0x0A, 0x00, 0x00, 0,                     /* data interface */   \
+        7, 5, (dataEp), 0x02, DATA_SIZE, 0, 0, 7, 5, 0x80 | (dataEp), 0x02,   \
+        DATA_SIZE, 0, 0
+
+// Audio function: entity IDs of the audio control topology
+#define AC_IT_USB 1 // input terminal: USB stream from the computer
+#define AC_FU_TX 2  // feature unit: transmit volume and mute
+#define AC_OT_TX 3  // output terminal: to the transmitter ("speaker")
+#define AC_IT_RX 4  // input terminal: from the receiver ("microphone")
+#define AC_FU_RX 5  // feature unit: receive volume and mute
+#define AC_OT_USB 6 // output terminal: USB stream to the computer
+#define AC_CLASS_LEN 70
+#define AS_LEN 52
+#define AUDIO_FUNCTION_LEN (8 + 9 + AC_CLASS_LEN + (2 * AS_LEN))
+
+#define AS_INTERFACE(intf, terminal, epAddr, epAttr)                          \
+    9, 4, (intf), 0, 0, 0x01, 0x02, 0x00, 0,       /* alt 0: no endpoint */   \
+        9, 4, (intf), 1, 1, 0x01, 0x02, 0x00, 0,   /* alt 1: streaming */     \
+        7, 0x24, 0x01, (terminal), 1, 0x01, 0x00,  /* general: PCM */         \
+        11, 0x24, 0x02, 0x01, 1, 2, 16, 1,         /* type I, mono, 16 bit */ \
+        AUDIO_RATE & 0xFF, (AUDIO_RATE >> 8) & 0xFF, AUDIO_RATE >> 16, 9, 5,  \
+        (epAddr), (epAttr), AUDIO_MPS, 0, 1, 0, 0, /* endpoint */             \
+        7, 0x25, 0x01, 0x00, 0, 0, 0               /* class endpoint */
+
+#define CFG_LEN (9 + (2 * CDC_FUNCTION_LEN) + AUDIO_FUNCTION_LEN)
+
+// clang-format off
 static const uint8_t cfgDesc[] = {
-    9,          2,    67,   0,          // CONFIGURATION, total length 67
-    2,          1,    0,                // 2 interfaces, value 1, no string
-    0xC0,       50,                     // self powered, 100 mA
+    9, 2, CFG_LEN & 0xFF, CFG_LEN >> 8, // CONFIGURATION
+    7, 1, 0,                            // 7 interfaces, value 1, no string
+    0xC0, 50,                           // self powered, 100 mA
 
-    9,          4,    0,    0,    1,    // INTERFACE 0, 1 endpoint
-    0x02,       0x02, 0x01, 0,          // CDC, ACM, AT commands
+    CDC_FUNCTION(0, 2, 1, STR_LOG),
+    CDC_FUNCTION(2, 4, 3, STR_CAT),
 
-    5,          0x24, 0x00, 0x10, 0x01, // header, CDC 1.10
-    5,          0x24, 0x01, 0x00, 0x01, // call management, data interface 1
-    4,          0x24, 0x02, 0x02, // ACM: line coding and control line state
-    5,          0x24, 0x06, 0x00, 0x01,             // union: master 0, slave 1
+    // Audio: interface association, then audio control interface 4
+    8, 11, 4, 3, 0x01, 0x00, 0x00, STR_AUDIO,
+    9, 4, 4, 0, 0, 0x01, 0x01, 0x00, STR_AUDIO,
+    10, 0x24, 0x01, 0x00, 0x01, AC_CLASS_LEN, 0, 2, 5, 6, // header, ADC 1.0
+    // Computer -> radio: USB stream, feature unit, "speaker"
+    12, 0x24, 0x02, AC_IT_USB, 0x01, 0x01, 0, 1, 0x00, 0x00, 0, 0,
+    9, 0x24, 0x06, AC_FU_TX, AC_IT_USB, 1, 0x03, 0x00, 0, // mute, volume
+    9, 0x24, 0x03, AC_OT_TX, 0x01, 0x03, 0, AC_FU_TX, 0,
+    // Radio -> computer: "microphone", feature unit, USB stream
+    12, 0x24, 0x02, AC_IT_RX, 0x01, 0x02, 0, 1, 0x00, 0x00, 0, 0,
+    9, 0x24, 0x06, AC_FU_RX, AC_IT_RX, 1, 0x03, 0x00, 0,
+    9, 0x24, 0x03, AC_OT_USB, 0x01, 0x01, 0, AC_FU_RX, 0,
 
-    7,          5,    0x82, 0x03,                   // ENDPOINT 2 IN, interrupt
-    NOTIF_SIZE, 0,    16,                           // 8 bytes, every 16 ms
+    AS_INTERFACE(5, AC_IT_USB, AUDIO_EP, 0x09),        // OUT, adaptive
+    AS_INTERFACE(6, AC_OT_USB, 0x80 | AUDIO_EP, 0x05), // IN, asynchronous
+};
+// clang-format on
 
-    9,          4,    1,    0,    2,                // INTERFACE 1, 2 endpoints
-    0x0A,       0x00, 0x00, 0,                      // CDC data
+static_assert(sizeof(cfgDesc) == CFG_LEN, "configuration descriptor length");
 
-    7,          5,    0x01, 0x02,                   // ENDPOINT 1 OUT, bulk
-    DATA_SIZE,  0,    0,    7,    5,    0x81, 0x02, // ENDPOINT 1 IN, bulk
-    DATA_SIZE,  0,    0
+static const char *const strings[] = { "OpenRTX", "OpenRTX radio",
+                                       "OpenRTX log", "OpenRTX CAT",
+                                       "OpenRTX audio" };
+
+// Serial ports ---------------------------------------------------------------
+
+struct Port {
+    uint8_t commIf;  // communication interface number
+    uint8_t dataEp;  // bulk endpoint number
+    uint8_t notifEp; // interrupt endpoint number
+    bool needDtr;    // output only while the computer has the port open
+    uint8_t *txRing;
+    uint32_t txSize;
+    uint8_t *rxRing;
+    uint32_t rxSize;
+    volatile uint32_t txHead; // written by thread code
+    volatile uint32_t txTail; // written by the interrupt handler
+    volatile bool txBusy;
+    volatile bool txZlp;      // last packet was full-size
+    volatile uint32_t rxHead; // written by the interrupt handler
+    volatile uint32_t rxTail; // written by thread code
+    volatile bool rxArmed;
+    volatile bool dtr;
+    uint8_t lineCoding[7];
 };
 
-static const char *const strings[] = { "OpenRTX", "OpenRTX rtxlink" };
+static uint8_t logTx[LOG_TX_RING], logRx[LOG_RX_RING];
+static uint8_t catTx[CAT_TX_RING], catRx[CAT_RX_RING];
+
+// clang-format off
+static Port ports[2] = {
+    { 0, 1, 2, true, logTx, LOG_TX_RING, logRx, LOG_RX_RING,
+      0, 0, false, false, 0, 0, false, false,
+      { 0x00, 0xC2, 0x01, 0x00, 0, 0, 8 } },  // 115200 8N1
+    { 2, 3, 4, false, catTx, CAT_TX_RING, catRx, CAT_RX_RING,
+      0, 0, false, false, 0, 0, false, false,
+      { 0x80, 0x25, 0x00, 0x00, 0, 0, 8 } },  // 9600 8N1
+};
+// clang-format on
 
 static uint8_t ep0Buf[128];
 static uint8_t setup[8];
 static enum Ep0State ep0State;
-static uint8_t lineCoding[7] = { 0x00, 0xC2, 0x01, 0x00, 0, 0, 8 };
+static const uint8_t *ep0TxPtr; // rest of the IN data stage
+static uint32_t ep0TxLeft;
+static bool ep0TxZlp;           // end the data stage with a ZLP
+static uint32_t ep0RxLen;       // bytes of the OUT data stage received
 
 static volatile bool configured;
-static volatile bool dtr;
 static volatile bool suspended;
 static volatile bool initialized;
 
-static uint8_t txRing[TX_RING_SIZE];
-static volatile uint32_t txHead; // written by thread code
-static volatile uint32_t txTail; // written by the interrupt handler
-static volatile bool txBusy;
-static volatile bool txZlp;      // last packet was full-size
+// Audio ----------------------------------------------------------------------
 
-static uint8_t rxRing[RX_RING_SIZE];
-static volatile uint32_t rxHead; // written by the interrupt handler
-static volatile uint32_t rxTail; // written by thread code
-static volatile bool rxArmed;
+#define TX_RING 4096        // samples, computer -> radio
+#define RX_RING 4096        // samples, radio -> computer
+#define RX_TARGET 1920      // receive buffer level kept, 40 ms
+#define TX_TARGET 1920      // transmit buffer level kept, 40 ms
+
+#define VOL_MIN (-40 * 256) // feature unit volume, 1/256 dB
+#define VOL_MAX (12 * 256)
+#define VOL_RES 256
+
+struct Feature {
+    volatile bool mute;
+    volatile int16_t volume;
+};
+
+static Feature fuTx = { false, 0 };
+static Feature fuRx = { false, 0 };
+
+static volatile uint8_t altTx; // interface 5
+static volatile uint8_t altRx; // interface 6
+
+static int16_t txRing[TX_RING];
+static volatile uint32_t txRingHead; // interrupt handler
+static volatile uint32_t txRingTail; // thread code
+static int16_t rxRing[RX_RING];
+static volatile uint32_t rxRingHead; // thread code
+static volatile uint32_t rxRingTail; // interrupt handler
+static bool rxPriming = true;        // sending silence until the buffer fills
+static int32_t rxAvg;                // smoothed buffer level, x 64
+static volatile bool hostPtt;
+
+static uint32_t txOverruns; // diagnostics
+static uint32_t rxUnderruns;
 
 static inline uint32_t irqLock()
 {
@@ -191,6 +327,18 @@ static void fifoDiscard(uint32_t len)
     }
 }
 
+static void flushTxFifo(uint32_t num)
+{
+    CORE->GRSTCTL = USB_OTG_GRSTCTL_TXFFLSH
+                  | (num << USB_OTG_GRSTCTL_TXFNUM_Pos);
+    waitBits(&CORE->GRSTCTL, USB_OTG_GRSTCTL_TXFFLSH, 0);
+}
+
+static inline uint32_t frameOdd()
+{
+    return (DEV->DSTS >> USB_OTG_DSTS_FNSOF_Pos) & 1;
+}
+
 // Endpoint 0 ---------------------------------------------------------------
 
 static void ep0ArmOut(uint32_t len)
@@ -200,20 +348,30 @@ static void ep0ArmOut(uint32_t len)
     OUTEP(0)->DOEPCTL |= USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA;
 }
 
+// One packet of the IN data stage (or its ZLP)
+static void ep0SendPacket()
+{
+    uint32_t len = (ep0TxLeft > EP0_SIZE) ? EP0_SIZE : ep0TxLeft;
+
+    INEP(0)->DIEPTSIZ = (1u << USB_OTG_DIEPTSIZ_PKTCNT_Pos) | len;
+    INEP(0)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+    fifoWrite(0, ep0TxPtr, len);
+
+    ep0TxPtr += len;
+    ep0TxLeft -= len;
+}
+
 static void ep0Send(const uint8_t *data, uint32_t len)
 {
     uint16_t wLength = setup[6] | (setup[7] << 8);
     if (len > wLength)
         len = wLength;
 
-    if (len > 127)
-        len = 127;
-
-    // One transfer of up to 127 bytes; the core splits it into packets
-    uint32_t pkts = (len == 0) ? 1 : ((len + EP0_SIZE - 1) / EP0_SIZE);
-    INEP(0)->DIEPTSIZ = (pkts << USB_OTG_DIEPTSIZ_PKTCNT_Pos) | len;
-    INEP(0)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
-    fifoWrite(0, data, len);
+    // A data stage shorter than asked, ending on a full packet, needs a ZLP
+    ep0TxZlp = (len > 0) && (len < wLength) && ((len % EP0_SIZE) == 0);
+    ep0TxPtr = data;
+    ep0TxLeft = len;
+    ep0SendPacket();
 
     ep0State = (len > 0) ? EP0_DATA_IN : EP0_STATUS;
 
@@ -234,21 +392,22 @@ static void ep0Stall()
     ep0ArmOut(EP0_SIZE);
 }
 
+static void ep0Receive(uint32_t len)
+{
+    ep0RxLen = 0;
+    ep0State = EP0_DATA_OUT;
+    ep0ArmOut(len);
+}
+
 static uint32_t stringDesc(uint8_t index)
 {
     uint32_t len = 0;
+    const uint32_t numStrings = sizeof(strings) / sizeof(strings[0]);
 
     if (index == 0) {
         ep0Buf[2] = 0x09; // English (US)
         ep0Buf[3] = 0x04;
         len = 4;
-    } else if (index <= 2) {
-        const char *s = strings[index - 1];
-        len = 2;
-        while (*s != '\0') {
-            ep0Buf[len++] = (uint8_t)*s++;
-            ep0Buf[len++] = 0;
-        }
     } else if (index == 3) {
         // Serial number: the 96-bit unique ID as 24 hex digits
         static const char hex[] = "0123456789ABCDEF";
@@ -260,6 +419,14 @@ static uint32_t stringDesc(uint8_t index)
             ep0Buf[len++] = hex[uid[i] & 0x0F];
             ep0Buf[len++] = 0;
         }
+    } else if ((index <= 2)
+               || ((index >= STR_LOG) && (index <= numStrings + 1))) {
+        const char *s = strings[(index <= 2) ? (index - 1) : (index - 2)];
+        len = 2;
+        while (*s != '\0') {
+            ep0Buf[len++] = (uint8_t)*s++;
+            ep0Buf[len++] = 0;
+        }
     } else {
         return 0;
     }
@@ -269,126 +436,481 @@ static uint32_t stringDesc(uint8_t index)
     return len;
 }
 
-// Data endpoints -----------------------------------------------------------
+// Serial port endpoints ------------------------------------------------------
 
-static void rxArm()
+static void rxArm(Port *p)
 {
-    if ((RX_RING_SIZE - (rxHead - rxTail)) < DATA_SIZE) {
-        rxArmed = false; // read() re-arms once there is room
+    if ((p->rxSize - (p->rxHead - p->rxTail)) < DATA_SIZE) {
+        p->rxArmed = false; // read() re-arms once there is room
         return;
     }
 
-    OUTEP(1)->DOEPTSIZ = (1u << USB_OTG_DOEPTSIZ_PKTCNT_Pos) | DATA_SIZE;
-    OUTEP(1)->DOEPCTL |= USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA;
-    rxArmed = true;
+    OUTEP(p->dataEp)->DOEPTSIZ = (1u << USB_OTG_DOEPTSIZ_PKTCNT_Pos)
+                               | DATA_SIZE;
+    OUTEP(p->dataEp)->DOEPCTL |= USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA;
+    p->rxArmed = true;
+}
+
+static bool portOpen(const Port *p)
+{
+    return configured && !suspended && (p->dtr || !p->needDtr);
 }
 
 /** Start the next bulk IN packet if possible. Interrupts must be disabled. */
-static void txKick()
+static void txKick(Port *p)
 {
-    if (!configured || !dtr || suspended || txBusy)
+    if (!portOpen(p) || p->txBusy)
         return;
 
-    uint32_t len = txHead - txTail;
+    uint32_t len = p->txHead - p->txTail;
     if (len == 0) {
-        if (!txZlp)
+        if (!p->txZlp)
             return;
 
-        txZlp = false; // end the transfer after a full-size packet
+        p->txZlp = false; // end the transfer after a full-size packet
     }
 
     if (len > DATA_SIZE)
         len = DATA_SIZE;
 
-    INEP(1)->DIEPTSIZ = (1u << USB_OTG_DIEPTSIZ_PKTCNT_Pos) | len;
-    INEP(1)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+    uint8_t ep = p->dataEp;
+    INEP(ep)->DIEPTSIZ = (1u << USB_OTG_DIEPTSIZ_PKTCNT_Pos) | len;
+    INEP(ep)->DIEPCTL |= USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
 
     for (uint32_t i = 0; i < len; i += 4) {
         uint32_t word = 0;
         for (uint32_t j = 0; (j < 4) && ((i + j) < len); j++) {
-            uint8_t b = txRing[(txTail + i + j) & (TX_RING_SIZE - 1)];
+            uint8_t b = p->txRing[(p->txTail + i + j) & (p->txSize - 1)];
             word |= ((uint32_t)b) << (8 * j);
         }
 
-        FIFO(1) = word;
+        FIFO(ep) = word;
     }
 
-    txTail = txTail + len;
-    txBusy = true;
-    txZlp = (len == DATA_SIZE);
+    p->txTail = p->txTail + len;
+    p->txBusy = true;
+    p->txZlp = (len == DATA_SIZE);
 }
 
-static void configureEndpoints()
+static void configurePort(Port *p)
 {
-    INEP(1)->DIEPCTL = USB_OTG_DIEPCTL_USBAEP
-                     | (2u << USB_OTG_DIEPCTL_EPTYP_Pos) // bulk
-                     | (1u << USB_OTG_DIEPCTL_TXFNUM_Pos)
-                     | USB_OTG_DIEPCTL_SD0PID_SEVNFRM | DATA_SIZE;
+    INEP(p->dataEp)->DIEPCTL =
+        USB_OTG_DIEPCTL_USBAEP | (2u << USB_OTG_DIEPCTL_EPTYP_Pos) // bulk
+        | ((uint32_t)p->dataEp << USB_OTG_DIEPCTL_TXFNUM_Pos)
+        | USB_OTG_DIEPCTL_SD0PID_SEVNFRM | DATA_SIZE;
 
-    INEP(2)->DIEPCTL = USB_OTG_DIEPCTL_USBAEP
-                     | (3u << USB_OTG_DIEPCTL_EPTYP_Pos) // interrupt
-                     | (2u << USB_OTG_DIEPCTL_TXFNUM_Pos)
-                     | USB_OTG_DIEPCTL_SD0PID_SEVNFRM | NOTIF_SIZE;
+    INEP(p->notifEp)->DIEPCTL =
+        USB_OTG_DIEPCTL_USBAEP | (3u << USB_OTG_DIEPCTL_EPTYP_Pos) // interrupt
+        | ((uint32_t)p->notifEp << USB_OTG_DIEPCTL_TXFNUM_Pos)
+        | USB_OTG_DIEPCTL_SD0PID_SEVNFRM | NOTIF_SIZE;
 
-    OUTEP(1)->DOEPCTL = USB_OTG_DOEPCTL_USBAEP
-                      | (2u << USB_OTG_DOEPCTL_EPTYP_Pos) // bulk
-                      | USB_OTG_DOEPCTL_SD0PID_SEVNFRM | DATA_SIZE;
+    OUTEP(p->dataEp)->DOEPCTL = USB_OTG_DOEPCTL_USBAEP
+                              | (2u << USB_OTG_DOEPCTL_EPTYP_Pos) // bulk
+                              | USB_OTG_DOEPCTL_SD0PID_SEVNFRM | DATA_SIZE;
 
-    DEV->DAINTMSK |= (1u << 1) | (1u << 2) | (1u << (16 + 1));
+    DEV->DAINTMSK |= (1u << p->dataEp) | (1u << p->notifEp)
+                   | (1u << (16 + p->dataEp));
 
-    txBusy = false;
-    txZlp = false;
-    rxArm();
+    p->txBusy = false;
+    p->txZlp = false;
+    rxArm(p);
 }
 
-static void deconfigureEndpoints()
+static void deconfigurePort(Port *p)
 {
+    uint8_t ep = p->dataEp;
+
     // A packet may still be armed on the bulk IN endpoint
-    if (INEP(1)->DIEPCTL & USB_OTG_DIEPCTL_EPENA) {
-        INEP(1)->DIEPCTL |= USB_OTG_DIEPCTL_EPDIS | USB_OTG_DIEPCTL_SNAK;
-        waitBits(&INEP(1)->DIEPINT, USB_OTG_DIEPINT_EPDISD,
+    if (INEP(ep)->DIEPCTL & USB_OTG_DIEPCTL_EPENA) {
+        INEP(ep)->DIEPCTL |= USB_OTG_DIEPCTL_EPDIS | USB_OTG_DIEPCTL_SNAK;
+        waitBits(&INEP(ep)->DIEPINT, USB_OTG_DIEPINT_EPDISD,
                  USB_OTG_DIEPINT_EPDISD, 10000);
-        INEP(1)->DIEPINT = USB_OTG_DIEPINT_EPDISD;
+        INEP(ep)->DIEPINT = USB_OTG_DIEPINT_EPDISD;
     }
 
-    INEP(1)->DIEPCTL = 0;
-    INEP(2)->DIEPCTL = 0;
-    OUTEP(1)->DOEPCTL = 0;
-    DEV->DAINTMSK &= ~((1u << 1) | (1u << 2) | (1u << (16 + 1)));
-    configured = false;
-    dtr = false;
-    txBusy = false;
+    INEP(ep)->DIEPCTL = 0;
+    INEP(p->notifEp)->DIEPCTL = 0;
+    OUTEP(ep)->DOEPCTL = 0;
+    DEV->DAINTMSK &= ~((1u << ep) | (1u << p->notifEp) | (1u << (16 + ep)));
+    p->dtr = false;
+    p->txBusy = false;
+}
+
+static Port *portOfInterface(uint8_t intf)
+{
+    for (Port &p : ports) {
+        if (p.commIf == intf)
+            return &p;
+    }
+
+    return NULL;
+}
+
+// Audio endpoints ------------------------------------------------------------
+
+static void updateSofMask()
+{
+    if ((altTx != 0) || (altRx != 0))
+        CORE->GINTMSK |= USB_OTG_GINTMSK_SOFM;
+    else
+        CORE->GINTMSK &= ~USB_OTG_GINTMSK_SOFM;
+}
+
+/*
+ * Next receive packet (radio -> computer), for the next frame: 48 samples,
+ * or 47/49 to keep the buffer level near RX_TARGET whatever the drift
+ * between the radio's clock and the computer's.  Silence while priming:
+ * until the radio has written RX_TARGET samples, and again after the buffer
+ * ran dry.
+ */
+static void audioRxSend()
+{
+    uint32_t fill = rxRingHead - rxRingTail;
+    uint32_t n = AUDIO_RATE / 1000;
+
+    if (rxPriming && (fill >= RX_TARGET)) {
+        rxPriming = false;
+        rxAvg = (int32_t)fill * 64;
+    }
+
+    if (!rxPriming) {
+        rxAvg += (int32_t)fill - (rxAvg / 64);
+        int32_t avg = rxAvg / 64;
+        if (avg > (RX_TARGET + 240))
+            n += 1;
+        else if (avg < (RX_TARGET - 240))
+            n -= 1;
+
+        if (fill < n) {
+            rxPriming = true; // ran dry
+            rxUnderruns++;
+        }
+    }
+
+    INEP(AUDIO_EP)->DIEPTSIZ = (1u << USB_OTG_DIEPTSIZ_MULCNT_Pos)
+                             | (1u << USB_OTG_DIEPTSIZ_PKTCNT_Pos) | (2 * n);
+    INEP(AUDIO_EP)->DIEPCTL |= (frameOdd() ? USB_OTG_DIEPCTL_SD0PID_SEVNFRM :
+                                             USB_OTG_DIEPCTL_SODDFRM)
+                             | USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA;
+
+    for (uint32_t i = 0; i < n; i += 2) {
+        uint32_t word = 0;
+        if (!rxPriming) {
+            uint16_t s0 = (uint16_t)rxRing[rxRingTail & (RX_RING - 1)];
+            uint16_t s1 = 0;
+            if ((i + 1) < n)
+                s1 = (uint16_t)rxRing[(rxRingTail + 1) & (RX_RING - 1)];
+            word = s0 | ((uint32_t)s1 << 16);
+            rxRingTail = rxRingTail + (((i + 1) < n) ? 2 : 1);
+        }
+
+        FIFO(AUDIO_EP) = word;
+    }
+}
+
+// Arm the transmit endpoint (computer -> radio) for this frame or the next
+static void audioTxArm(bool thisFrame)
+{
+    uint32_t odd = frameOdd();
+    if (!thisFrame)
+        odd ^= 1;
+
+    OUTEP(AUDIO_EP)->DOEPTSIZ = (1u << USB_OTG_DOEPTSIZ_PKTCNT_Pos) | AUDIO_MPS;
+    OUTEP(AUDIO_EP)->DOEPCTL |= (odd ? USB_OTG_DOEPCTL_SODDFRM :
+                                       USB_OTG_DOEPCTL_SD0PID_SEVNFRM)
+                              | USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA;
+}
+
+static void audioRxStart()
+{
+    INEP(AUDIO_EP)->DIEPCTL = USB_OTG_DIEPCTL_USBAEP
+                            | (1u << USB_OTG_DIEPCTL_EPTYP_Pos) // isochronous
+                            | ((uint32_t)AUDIO_EP << USB_OTG_DIEPCTL_TXFNUM_Pos)
+                            | AUDIO_MPS;
+    DEV->DAINTMSK |= (1u << AUDIO_EP);
+    flushTxFifo(AUDIO_EP);
+    rxPriming = true;
+    audioRxSend();
+}
+
+static void audioRxStop()
+{
+    if (INEP(AUDIO_EP)->DIEPCTL & USB_OTG_DIEPCTL_EPENA) {
+        INEP(AUDIO_EP)->DIEPCTL |= USB_OTG_DIEPCTL_EPDIS | USB_OTG_DIEPCTL_SNAK;
+        waitBits(&INEP(AUDIO_EP)->DIEPINT, USB_OTG_DIEPINT_EPDISD,
+                 USB_OTG_DIEPINT_EPDISD, 10000);
+        INEP(AUDIO_EP)->DIEPINT = USB_OTG_DIEPINT_EPDISD;
+    }
+
+    INEP(AUDIO_EP)->DIEPCTL = 0;
+    DEV->DAINTMSK &= ~(1u << AUDIO_EP);
+    flushTxFifo(AUDIO_EP);
+}
+
+static void audioTxStart()
+{
+    OUTEP(AUDIO_EP)->DOEPCTL = USB_OTG_DOEPCTL_USBAEP
+                             | (1u << USB_OTG_DOEPCTL_EPTYP_Pos) // isochronous
+                             | AUDIO_MPS;
+    DEV->DAINTMSK |= (1u << (16 + AUDIO_EP));
+    audioTxArm(false);
+}
+
+static void audioTxStop()
+{
+    // An enabled OUT endpoint is disabled under the global OUT NAK
+    if (OUTEP(AUDIO_EP)->DOEPCTL & USB_OTG_DOEPCTL_EPENA) {
+        DEV->DCTL |= USB_OTG_DCTL_SGONAK;
+        waitBits(&CORE->GINTSTS, USB_OTG_GINTSTS_BOUTNAKEFF,
+                 USB_OTG_GINTSTS_BOUTNAKEFF, 10000);
+        OUTEP(AUDIO_EP)->DOEPCTL |= USB_OTG_DOEPCTL_EPDIS
+                                  | USB_OTG_DOEPCTL_SNAK;
+        waitBits(&OUTEP(AUDIO_EP)->DOEPINT, USB_OTG_DOEPINT_EPDISD,
+                 USB_OTG_DOEPINT_EPDISD, 10000);
+        OUTEP(AUDIO_EP)->DOEPINT = USB_OTG_DOEPINT_EPDISD;
+        DEV->DCTL |= USB_OTG_DCTL_CGONAK;
+    }
+
+    OUTEP(AUDIO_EP)->DOEPCTL = 0;
+    DEV->DAINTMSK &= ~(1u << (16 + AUDIO_EP));
+}
+
+static void setAudioAlt(uint8_t intf, uint8_t alt)
+{
+    if (intf == 5) {
+        if ((alt != 0) && (altTx == 0))
+            audioTxStart();
+        else if ((alt == 0) && (altTx != 0))
+            audioTxStop();
+        altTx = alt;
+    } else {
+        if ((alt != 0) && (altRx == 0))
+            audioRxStart();
+        else if ((alt == 0) && (altRx != 0))
+            audioRxStop();
+        altRx = alt;
+    }
+
+    updateSofMask();
+}
+
+static void audioStop()
+{
+    if (altTx != 0)
+        audioTxStop();
+    if (altRx != 0)
+        audioRxStop();
+    altTx = 0;
+    altRx = 0;
+    hostPtt = false;
+    updateSofMask();
+}
+
+// Received audio packet from the computer, still in the RX FIFO
+static void audioTxData(uint32_t count)
+{
+    uint32_t samples = count / 2;
+    uint32_t room = TX_RING - (txRingHead - txRingTail);
+
+    if ((altTx == 0) || (samples > room) || (count & 1)) {
+        if (altTx != 0)
+            txOverruns++;
+        fifoDiscard(count);
+        return;
+    }
+
+    uint32_t head = txRingHead;
+    for (uint32_t i = 0; i < samples; i += 2) {
+        uint32_t word = FIFO(0);
+        txRing[head & (TX_RING - 1)] = (int16_t)(word & 0xFFFF);
+        head++;
+        if ((i + 1) < samples) {
+            txRing[head & (TX_RING - 1)] = (int16_t)(word >> 16);
+            head++;
+        }
+    }
+
+    txRingHead = head;
+}
+
+// Start of frame: keep the isochronous endpoints going
+static void startOfFrame()
+{
+    if (altTx != 0) {
+        if (OUTEP(AUDIO_EP)->DOEPCTL & USB_OTG_DOEPCTL_EPENA) {
+            // A frame without data (or one dropped) leaves the endpoint
+            // waiting for the wrong parity: follow the current frame
+            OUTEP(AUDIO_EP)->DOEPCTL |= frameOdd() ?
+                                            USB_OTG_DOEPCTL_SODDFRM :
+                                            USB_OTG_DOEPCTL_SD0PID_SEVNFRM;
+        } else {
+            audioTxArm(true);
+        }
+    }
+
+    if ((altRx != 0) && !(INEP(AUDIO_EP)->DIEPCTL & USB_OTG_DIEPCTL_EPENA))
+        audioRxSend();
+}
+
+// The receive packet armed for the frame just ended was not taken
+static void incompleteRx()
+{
+    if (altRx == 0)
+        return;
+
+    uint32_t ctl = INEP(AUDIO_EP)->DIEPCTL;
+    uint32_t parity = (ctl & USB_OTG_DIEPCTL_EONUM_DPID) ? 1 : 0;
+    if ((ctl & USB_OTG_DIEPCTL_EPENA) && (parity == frameOdd())) {
+        // Keep the data in the FIFO, retry in the next frame
+        INEP(AUDIO_EP)->DIEPCTL = ctl
+                                | (parity ? USB_OTG_DIEPCTL_SD0PID_SEVNFRM :
+                                            USB_OTG_DIEPCTL_SODDFRM);
+    }
+}
+
+// Audio class requests -------------------------------------------------------
+
+static Feature *featureOf(uint8_t entity)
+{
+    if (entity == AC_FU_TX)
+        return &fuTx;
+    if (entity == AC_FU_RX)
+        return &fuRx;
+    return NULL;
+}
+
+static void putLe16(uint8_t *buf, int16_t v)
+{
+    buf[0] = (uint8_t)(v & 0xFF);
+    buf[1] = (uint8_t)(((uint16_t)v) >> 8);
+}
+
+static bool audioRequest(uint8_t bmRequestType, uint8_t bRequest,
+                         uint16_t wValue, uint16_t wIndex, uint16_t wLength)
+{
+    uint8_t cs = wValue >> 8;
+
+    // Endpoint: sampling frequency (only one, 48 kHz)
+    if ((bmRequestType & 0x1F) == 0x02) {
+        if ((wIndex & 0x0F) != AUDIO_EP || cs != 0x01)
+            return false;
+        if (bRequest == 0x01) { // SET_CUR
+            ep0Receive(wLength);
+            return true;
+        }
+        if (bRequest == 0x81) { // GET_CUR
+            ep0Buf[0] = AUDIO_RATE & 0xFF;
+            ep0Buf[1] = (AUDIO_RATE >> 8) & 0xFF;
+            ep0Buf[2] = AUDIO_RATE >> 16;
+            ep0Send(ep0Buf, 3);
+            return true;
+        }
+        return false;
+    }
+
+    // Feature units: master channel mute (1 byte) and volume (2 bytes)
+    Feature *fu = featureOf(wIndex >> 8);
+    if ((fu == NULL) || ((wValue & 0xFF) != 0))
+        return false;
+
+    if (bRequest == 0x01) { // SET_CUR
+        if ((cs != 0x01) && (cs != 0x02))
+            return false;
+        ep0Receive(wLength);
+        return true;
+    }
+
+    if (cs == 0x01) {
+        if (bRequest != 0x81)
+            return false;
+        ep0Buf[0] = fu->mute ? 1 : 0;
+        ep0Send(ep0Buf, 1);
+        return true;
+    }
+
+    if (cs != 0x02)
+        return false;
+
+    switch (bRequest) {
+        case 0x81: // GET_CUR
+            putLe16(ep0Buf, fu->volume);
+            break;
+        case 0x82: // GET_MIN
+            putLe16(ep0Buf, VOL_MIN);
+            break;
+        case 0x83: // GET_MAX
+            putLe16(ep0Buf, VOL_MAX);
+            break;
+        case 0x84: // GET_RES
+            putLe16(ep0Buf, VOL_RES);
+            break;
+        default:
+            return false;
+    }
+
+    ep0Send(ep0Buf, 2);
+    return true;
+}
+
+// Data stage of a class request received
+static void outDataStage()
+{
+    uint8_t bmRequestType = setup[0];
+    uint8_t bRequest = setup[1];
+    uint8_t cs = setup[3];
+    uint16_t wIndex = setup[4] | (setup[5] << 8);
+
+    if (((bmRequestType & 0x1F) == 0x01) && (bRequest == 0x20)) {
+        // SET_LINE_CODING
+        Port *p = portOfInterface(wIndex & 0xFF);
+        if ((p != NULL) && (ep0RxLen == sizeof(p->lineCoding)))
+            memcpy(p->lineCoding, ep0Buf, sizeof(p->lineCoding));
+    } else if (((bmRequestType & 0x1F) == 0x01) && (bRequest == 0x01)) {
+        // Feature unit SET_CUR
+        Feature *fu = featureOf(wIndex >> 8);
+        if ((fu != NULL) && (cs == 0x01) && (ep0RxLen >= 1)) {
+            fu->mute = (ep0Buf[0] != 0);
+        } else if ((fu != NULL) && (cs == 0x02) && (ep0RxLen >= 2)) {
+            int16_t v = (int16_t)(ep0Buf[0] | (ep0Buf[1] << 8));
+            if (v < VOL_MIN)
+                v = VOL_MIN;
+            if (v > VOL_MAX)
+                v = VOL_MAX;
+            fu->volume = v;
+        }
+    }
+    // Endpoint SET_CUR (sampling frequency): only 48 kHz, nothing to do
+
+    ep0Ack();
 }
 
 // Control requests ---------------------------------------------------------
 
-static void handleSetup()
+static void classRequest(uint8_t bmRequestType, uint8_t bRequest,
+                         uint16_t wValue, uint16_t wIndex, uint16_t wLength)
 {
-    uint8_t bmRequestType = setup[0];
-    uint8_t bRequest = setup[1];
-    uint16_t wValue = setup[2] | (setup[3] << 8);
-    uint16_t wLength = setup[6] | (setup[7] << 8);
+    uint8_t intf = wIndex & 0xFF;
+    Port *p = NULL;
+    if ((bmRequestType & 0x1F) == 0x01)
+        p = portOfInterface(intf);
 
-    if ((bmRequestType & 0x60) == 0x20) // class request
-    {
+    if (p != NULL) {
         switch (bRequest) {
             case 0x20: // SET_LINE_CODING, 7 bytes follow
-                if (wLength != sizeof(lineCoding))
+                if (wLength != sizeof(p->lineCoding))
                     break;
-
-                ep0State = EP0_DATA_OUT;
-                ep0ArmOut(sizeof(lineCoding));
+                ep0Receive(sizeof(p->lineCoding));
                 return;
 
             case 0x21: // GET_LINE_CODING
-                memcpy(ep0Buf, lineCoding, sizeof(lineCoding));
-                ep0Send(ep0Buf, sizeof(lineCoding));
+                memcpy(ep0Buf, p->lineCoding, sizeof(p->lineCoding));
+                ep0Send(ep0Buf, sizeof(p->lineCoding));
                 return;
 
             case 0x22: // SET_CONTROL_LINE_STATE
-                dtr = (wValue & 0x01) != 0;
-                if (dtr == false)
-                    txZlp = false;
+                p->dtr = (wValue & 0x01) != 0;
+                if (!p->dtr)
+                    p->txZlp = false;
                 ep0Ack();
                 return;
 
@@ -401,6 +923,42 @@ static void handleSetup()
         }
 
         ep0Stall();
+        return;
+    }
+
+    bool audio = (((bmRequestType & 0x1F) == 0x01) && (intf == 4))
+              || ((bmRequestType & 0x1F) == 0x02);
+    if (audio && audioRequest(bmRequestType, bRequest, wValue, wIndex, wLength))
+        return;
+
+    ep0Stall();
+}
+
+static void configure()
+{
+    for (Port &p : ports)
+        configurePort(&p);
+    configured = true;
+}
+
+static void deconfigure()
+{
+    audioStop();
+    for (Port &p : ports)
+        deconfigurePort(&p);
+    configured = false;
+}
+
+static void handleSetup()
+{
+    uint8_t bmRequestType = setup[0];
+    uint8_t bRequest = setup[1];
+    uint16_t wValue = setup[2] | (setup[3] << 8);
+    uint16_t wIndex = setup[4] | (setup[5] << 8);
+    uint16_t wLength = setup[6] | (setup[7] << 8);
+
+    if ((bmRequestType & 0x60) == 0x20) { // class request
+        classRequest(bmRequestType, bRequest, wValue, wIndex, wLength);
         return;
     }
 
@@ -421,9 +979,9 @@ static void handleSetup()
             // ENDPOINT_HALT on a data endpoint: the host resets its data
             // toggle, so must we, or the next packet is silently dropped
             if (((bmRequestType & 0x1F) == 0x02) && (wValue == 0)) {
-                uint8_t ep = setup[4] & 0x0F;
-                if ((ep == 1) || (ep == 2)) {
-                    if (setup[4] & 0x80) {
+                uint8_t ep = wIndex & 0x0F;
+                if ((ep >= 1) && (ep <= 4)) {
+                    if (wIndex & 0x80) {
                         INEP(ep)->DIEPCTL &= ~USB_OTG_DIEPCTL_STALL;
                         INEP(ep)->DIEPCTL |= USB_OTG_DIEPCTL_SD0PID_SEVNFRM;
                     } else {
@@ -452,14 +1010,12 @@ static void handleSetup()
             uint8_t index = wValue & 0xFF;
 
             if (type == 1) {
-                memcpy(ep0Buf, devDesc, sizeof(devDesc));
-                ep0Send(ep0Buf, sizeof(devDesc));
+                ep0Send(devDesc, sizeof(devDesc));
                 return;
             }
 
             if (type == 2) {
-                memcpy(ep0Buf, cfgDesc, sizeof(cfgDesc));
-                ep0Send(ep0Buf, sizeof(cfgDesc));
+                ep0Send(cfgDesc, sizeof(cfgDesc));
                 return;
             }
 
@@ -481,23 +1037,39 @@ static void handleSetup()
 
         case 0x09: // SET_CONFIGURATION
             if (wValue == 1) {
-                configureEndpoints();
-                configured = true;
+                if (!configured)
+                    configure();
             } else {
-                deconfigureEndpoints();
+                deconfigure();
             }
 
             ep0Ack();
             return;
 
         case 0x0A: // GET_INTERFACE
-            ep0Buf[0] = 0;
+        {
+            uint8_t intf = wIndex & 0xFF;
+            if (intf > 6)
+                break;
+            ep0Buf[0] = (intf == 5) ? altTx : ((intf == 6) ? altRx : 0);
             ep0Send(ep0Buf, 1);
             return;
+        }
 
         case 0x0B: // SET_INTERFACE
+        {
+            uint8_t intf = wIndex & 0xFF;
+            if ((intf == 5) || (intf == 6)) {
+                if (wValue > 1)
+                    break;
+                setAudioAlt(intf, wValue);
+            } else if ((intf > 6) || (wValue != 0)) {
+                break;
+            }
+
             ep0Ack();
             return;
+        }
 
         default:
             break;
@@ -508,18 +1080,11 @@ static void handleSetup()
 
 // Interrupt handling -------------------------------------------------------
 
-static void flushTxFifos()
-{
-    CORE->GRSTCTL = USB_OTG_GRSTCTL_TXFFLSH
-                  | (0x10u << USB_OTG_GRSTCTL_TXFNUM_Pos); // all
-    waitBits(&CORE->GRSTCTL, USB_OTG_GRSTCTL_TXFFLSH, 0);
-}
-
 static void busReset()
 {
-    flushTxFifos();
+    flushTxFifo(0x10); // all
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NUM_EPS; i++) {
         INEP(i)->DIEPINT = 0xFB7F;
         INEP(i)->DIEPCTL &= ~USB_OTG_DIEPCTL_STALL;
         OUTEP(i)->DOEPINT = 0xFB7F;
@@ -527,7 +1092,7 @@ static void busReset()
         OUTEP(i)->DOEPCTL |= USB_OTG_DOEPCTL_SNAK;
     }
 
-    deconfigureEndpoints();
+    deconfigure();
     suspended = false;
 
     DEV->DAINTMSK = (1u << 0) | (1u << 16);
@@ -557,25 +1122,32 @@ static void rxFifoLevel()
         return; // completion entries carry no data
 
     if (ep == 0) {
-        if (count <= sizeof(ep0Buf))
-            fifoRead(ep0Buf, count);
-        else
+        if ((ep0RxLen + count) <= sizeof(ep0Buf)) {
+            fifoRead(&ep0Buf[ep0RxLen], count);
+            ep0RxLen += count;
+        } else {
             fifoDiscard(count);
-
-        if ((ep0State == EP0_DATA_OUT) && (count == sizeof(lineCoding)))
-            memcpy(lineCoding, ep0Buf, sizeof(lineCoding));
+        }
 
         return;
     }
 
-    if (ep == 1) {
+    if (ep == AUDIO_EP) {
+        audioTxData(count);
+        return;
+    }
+
+    for (Port &p : ports) {
+        if (ep != p.dataEp)
+            continue;
+
         // Room for a full packet was checked when the endpoint was armed
         for (uint32_t i = 0; i < count; i += 4) {
             uint32_t word = FIFO(0);
             for (uint32_t j = 0; (j < 4) && ((i + j) < count); j++) {
-                rxRing[rxHead & (RX_RING_SIZE - 1)] = (uint8_t)(word
+                p.rxRing[p.rxHead & (p.rxSize - 1)] = (uint8_t)(word
                                                                 >> (8 * j));
-                rxHead = rxHead + 1;
+                p.rxHead = p.rxHead + 1;
             }
         }
 
@@ -595,7 +1167,7 @@ static void outEndpoints()
 
         if (flags & USB_OTG_DOEPINT_XFRC) {
             if (ep0State == EP0_DATA_OUT)
-                ep0Ack();            // line coding stored, send status
+                outDataStage();      // data stored, send status
             else if (ep0State == EP0_DATA_IN)
                 ep0State = EP0_IDLE; // host's status ZLP received
         }
@@ -606,12 +1178,22 @@ static void outEndpoints()
         }
     }
 
-    if (pending & (1u << 1)) {
-        uint32_t flags = OUTEP(1)->DOEPINT;
-        OUTEP(1)->DOEPINT = flags;
+    for (Port &p : ports) {
+        if (pending & (1u << p.dataEp)) {
+            uint32_t flags = OUTEP(p.dataEp)->DOEPINT;
+            OUTEP(p.dataEp)->DOEPINT = flags;
 
-        if (flags & USB_OTG_DOEPINT_XFRC)
-            rxArm();
+            if (flags & USB_OTG_DOEPINT_XFRC)
+                rxArm(&p);
+        }
+    }
+
+    if (pending & (1u << AUDIO_EP)) {
+        uint32_t flags = OUTEP(AUDIO_EP)->DOEPINT;
+        OUTEP(AUDIO_EP)->DOEPINT = flags;
+
+        if ((flags & USB_OTG_DOEPINT_XFRC) && (altTx != 0))
+            audioTxArm(false);
     }
 }
 
@@ -623,22 +1205,45 @@ static void inEndpoints()
         uint32_t flags = INEP(0)->DIEPINT;
         INEP(0)->DIEPINT = flags;
 
-        if ((flags & USB_OTG_DIEPINT_XFRC) && (ep0State == EP0_STATUS))
-            ep0State = EP0_IDLE;
-    }
-
-    if (pending & (1u << 1)) {
-        uint32_t flags = INEP(1)->DIEPINT;
-        INEP(1)->DIEPINT = flags;
-
         if (flags & USB_OTG_DIEPINT_XFRC) {
-            txBusy = false;
-            txKick();
+            if ((ep0State == EP0_DATA_IN) && ((ep0TxLeft > 0) || ep0TxZlp)) {
+                if (ep0TxLeft == 0)
+                    ep0TxZlp = false;
+                ep0SendPacket();
+            } else if (ep0State == EP0_STATUS) {
+                ep0State = EP0_IDLE;
+            }
         }
     }
 
-    if (pending & (1u << 2))
-        INEP(2)->DIEPINT = INEP(2)->DIEPINT;
+    for (Port &p : ports) {
+        if (pending & (1u << p.dataEp)) {
+            uint32_t flags = INEP(p.dataEp)->DIEPINT;
+            INEP(p.dataEp)->DIEPINT = flags;
+
+            if (flags & USB_OTG_DIEPINT_XFRC) {
+                p.txBusy = false;
+                txKick(&p);
+            }
+        }
+
+        if (pending & (1u << p.notifEp))
+            INEP(p.notifEp)->DIEPINT = INEP(p.notifEp)->DIEPINT;
+    }
+
+    if (pending & (1u << AUDIO_EP)) {
+        uint32_t flags = INEP(AUDIO_EP)->DIEPINT;
+        INEP(AUDIO_EP)->DIEPINT = flags;
+
+        if ((flags & USB_OTG_DIEPINT_XFRC) && (altRx != 0))
+            audioRxSend();
+    }
+}
+
+static void linkDown()
+{
+    suspended = true; // also what a cable unplug looks like
+    hostPtt = false;
 }
 
 void OTG_FS_IRQHandler()
@@ -656,6 +1261,11 @@ void OTG_FS_IRQHandler()
         DEV->DCTL |= USB_OTG_DCTL_CGINAK;
     }
 
+    if (status & USB_OTG_GINTSTS_SOF) {
+        CORE->GINTSTS = USB_OTG_GINTSTS_SOF;
+        startOfFrame();
+    }
+
     while (CORE->GINTSTS & USB_OTG_GINTSTS_RXFLVL)
         rxFifoLevel();
 
@@ -665,24 +1275,33 @@ void OTG_FS_IRQHandler()
     if (status & USB_OTG_GINTSTS_IEPINT)
         inEndpoints();
 
+    if (status & USB_OTG_GINTSTS_IISOIXFR) {
+        CORE->GINTSTS = USB_OTG_GINTSTS_IISOIXFR;
+        incompleteRx();
+    }
+
+    if (status & USB_OTG_GINTSTS_PXFR_INCOMPISOOUT) {
+        // A transmit packet missed: the next start of frame re-aims
+        CORE->GINTSTS = USB_OTG_GINTSTS_PXFR_INCOMPISOOUT;
+    }
+
     if (status & USB_OTG_GINTSTS_USBSUSP) {
         CORE->GINTSTS = USB_OTG_GINTSTS_USBSUSP;
-        suspended = true; // also what a cable unplug looks like
+        linkDown();
     }
 
     if (status & USB_OTG_GINTSTS_WKUINT) {
         CORE->GINTSTS = USB_OTG_GINTSTS_WKUINT;
         suspended = false;
-        txKick();
+        for (Port &p : ports)
+            txKick(&p);
     }
 }
 
-// Character device ---------------------------------------------------------
+// Initialisation -------------------------------------------------------------
 
-static int usbcdc_init(const struct chardev *dev)
+static int usbInit()
 {
-    (void)dev;
-
     if (initialized)
         return 0;
 
@@ -753,21 +1372,27 @@ static int usbcdc_init(const struct chardev *dev)
     DEV->DCTL |= USB_OTG_DCTL_SDIS; // stay detached while setting up
     DEV->DCFG |= USB_OTG_DCFG_DSPD; // full speed, embedded PHY
 
+    // FIFO RAM: receive FIFO, then one transmit FIFO per IN endpoint
+    static const uint16_t txWords[NUM_EPS] = { TX0_FIFO_WORDS, TX1_FIFO_WORDS,
+                                               TX2_FIFO_WORDS, TX3_FIFO_WORDS,
+                                               TX4_FIFO_WORDS, TX5_FIFO_WORDS };
+    uint32_t start = RX_FIFO_WORDS;
     CORE->GRXFSIZ = RX_FIFO_WORDS;
-    CORE->DIEPTXF0_HNPTXFSIZ = (TX0_FIFO_WORDS << 16) | RX_FIFO_WORDS;
-    CORE->DIEPTXF[0] = (TX1_FIFO_WORDS << 16)
-                     | (RX_FIFO_WORDS + TX0_FIFO_WORDS);
-    CORE->DIEPTXF[1] = (TX2_FIFO_WORDS << 16)
-                     | (RX_FIFO_WORDS + TX0_FIFO_WORDS + TX1_FIFO_WORDS);
+    CORE->DIEPTXF0_HNPTXFSIZ = (txWords[0] << 16) | start;
+    start += txWords[0];
+    for (int i = 1; i < NUM_EPS; i++) {
+        CORE->DIEPTXF[i - 1] = ((uint32_t)txWords[i] << 16) | start;
+        start += txWords[i];
+    }
 
-    flushTxFifos();
+    flushTxFifo(0x10);
     CORE->GRSTCTL = USB_OTG_GRSTCTL_RXFFLSH;
     waitBits(&CORE->GRSTCTL, USB_OTG_GRSTCTL_RXFFLSH, 0);
 
     DEV->DIEPMSK = 0;
     DEV->DOEPMSK = 0;
     DEV->DAINTMSK = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NUM_EPS; i++) {
         INEP(i)->DIEPCTL = 0;
         INEP(i)->DIEPTSIZ = 0;
         INEP(i)->DIEPINT = 0xFB7F;
@@ -792,6 +1417,19 @@ static int usbcdc_init(const struct chardev *dev)
     return 0;
 }
 
+// Character devices ----------------------------------------------------------
+
+static Port *portOf(const struct chardev *dev)
+{
+    return (Port *)dev->data;
+}
+
+static int usbcdc_init(const struct chardev *dev)
+{
+    (void)dev;
+    return usbInit();
+}
+
 static int usbcdc_terminate(const struct chardev *dev)
 {
     (void)dev;
@@ -803,7 +1441,11 @@ static int usbcdc_terminate(const struct chardev *dev)
     NVIC_DisableIRQ(OTG_FS_IRQn);
     RCC->AHB1ENR &= ~RCC_AHB1ENR_USB2OTGFSEN;
     configured = false;
-    dtr = false;
+    for (Port &p : ports)
+        p.dtr = false;
+    altTx = 0;
+    altRx = 0;
+    hostPtt = false;
     initialized = false;
 
     return 0;
@@ -812,19 +1454,18 @@ static int usbcdc_terminate(const struct chardev *dev)
 static ssize_t usbcdc_read(const struct chardev *dev, void *data,
                            const size_t len)
 {
-    (void)dev;
-
+    Port *p = portOf(dev);
     uint8_t *out = (uint8_t *)data;
     size_t n = 0;
 
     uint32_t key = irqLock();
-    while ((n < len) && (rxTail != rxHead)) {
-        out[n++] = rxRing[rxTail & (RX_RING_SIZE - 1)];
-        rxTail = rxTail + 1;
+    while ((n < len) && (p->rxTail != p->rxHead)) {
+        out[n++] = p->rxRing[p->rxTail & (p->rxSize - 1)];
+        p->rxTail = p->rxTail + 1;
     }
 
-    if (configured && !rxArmed)
-        rxArm();
+    if (configured && !p->rxArmed)
+        rxArm(p);
     irqUnlock(key);
 
     return n;
@@ -833,24 +1474,24 @@ static ssize_t usbcdc_read(const struct chardev *dev, void *data,
 static ssize_t usbcdc_write(const struct chardev *dev, const void *data,
                             const size_t len)
 {
-    (void)dev;
+    Port *p = portOf(dev);
 
-    if (!usbcdc_connected())
+    if (!initialized || !portOpen(p))
         return -ENOTCONN;
 
     const uint8_t *in = (const uint8_t *)data;
 
     uint32_t key = irqLock();
-    if ((TX_RING_SIZE - (txHead - txTail)) < len) {
+    if ((p->txSize - (p->txHead - p->txTail)) < len) {
         irqUnlock(key);
         return -EAGAIN;
     }
 
     for (size_t i = 0; i < len; i++)
-        txRing[(txHead + i) & (TX_RING_SIZE - 1)] = in[i];
+        p->txRing[(p->txHead + i) & (p->txSize - 1)] = in[i];
 
-    txHead = txHead + len;
-    txKick();
+    p->txHead = p->txHead + len;
+    txKick(p);
     irqUnlock(key);
 
     return len;
@@ -868,7 +1509,12 @@ static int usbcdc_ioctl(const struct chardev *dev, const int cmd,
 
 bool usbcdc_connected()
 {
-    return initialized && configured && dtr && !suspended;
+    return initialized && portOpen(&ports[0]);
+}
+
+bool usbcat_connected()
+{
+    return initialized && portOpen(&ports[1]);
 }
 
 // Positional initializers: designated ones are C++20
@@ -877,5 +1523,161 @@ static const struct chardev_api usbcdc_api = { usbcdc_init, usbcdc_terminate,
                                                usbcdc_ioctl };
 
 const struct chardev usb_cdc_chardev = { NULL, // config
-                                         NULL, // data
-                                         &usbcdc_api };
+                                         &ports[0], &usbcdc_api };
+
+const struct chardev usb_cat_chardev = { NULL, // config
+                                         &ports[1], &usbcdc_api };
+
+// Audio API ------------------------------------------------------------------
+
+/*
+ * Linear gain of a feature unit, recomputed when its volume changes (thread
+ * code only: powf is not for the interrupt handler).
+ */
+struct GainCache {
+    int16_t volume;
+    float gain;
+};
+
+static float gainOf(const Feature *fu, GainCache *cache)
+{
+    if (fu->mute)
+        return 0.0f;
+
+    int16_t v = fu->volume;
+    if (v != cache->volume) {
+        cache->gain = powf(10.0f, ((float)v / 256.0f) / 20.0f);
+        cache->volume = v;
+    }
+
+    return cache->gain;
+}
+
+static inline int16_t saturate(float v)
+{
+    if (v > 32767.0f)
+        return 32767;
+    if (v < -32768.0f)
+        return -32768;
+    return (int16_t)v;
+}
+
+static GainCache rxGain = { 0, 1.0f };
+static GainCache txGain = { 0, 1.0f };
+
+bool usbAudio_rxStreaming()
+{
+    return initialized && configured && !suspended && (altRx != 0);
+}
+
+void usbAudio_write(const int16_t *samples, size_t n)
+{
+    if (!usbAudio_rxStreaming())
+        return;
+
+    float g = gainOf(&fuRx, &rxGain);
+    uint32_t room = RX_RING - (rxRingHead - rxRingTail);
+    if (n > room)
+        n = room; // overflow: the rest is dropped
+
+    uint32_t head = rxRingHead;
+    for (size_t i = 0; i < n; i++)
+        rxRing[(head + i) & (RX_RING - 1)] = saturate(samples[i] * g);
+
+    rxRingHead = head + n;
+}
+
+bool usbAudio_txStreaming()
+{
+    return initialized && configured && !suspended && (altTx != 0);
+}
+
+size_t usbAudio_available()
+{
+    return txRingHead - txRingTail;
+}
+
+size_t usbAudio_read(int16_t *samples, size_t n)
+{
+    float g = gainOf(&fuTx, &txGain);
+    uint32_t avail = txRingHead - txRingTail;
+    if (n > avail)
+        n = avail;
+
+    uint32_t tail = txRingTail;
+    for (size_t i = 0; i < n; i++)
+        samples[i] = saturate(txRing[(tail + i) & (TX_RING - 1)] * g);
+
+    txRingTail = tail + n;
+    return n;
+}
+
+/*
+ * Resampler for a consumer paced by the radio's clock: linear interpolation
+ * at a rate 1 +- 0.2% steered by the buffer level, so that the computer's
+ * clock and the radio's can differ by a few hundred ppm.  Silence while the
+ * buffer fills up to TX_TARGET (at the start, and after running dry).
+ */
+static bool txPriming = true;
+static float txFrac = 0.0f;
+
+void usbAudio_readResampled(int16_t *samples, size_t n)
+{
+    float g = gainOf(&fuTx, &txGain);
+    uint32_t fill = txRingHead - txRingTail;
+
+    if (txPriming && (fill >= TX_TARGET)) {
+        txPriming = false;
+        txFrac = 0.0f;
+    }
+
+    if (txPriming) {
+        memset(samples, 0, n * sizeof(int16_t));
+        return;
+    }
+
+    float err = ((float)fill - (float)TX_TARGET) / (float)TX_TARGET;
+    if (err > 1.0f)
+        err = 1.0f;
+    if (err < -1.0f)
+        err = -1.0f;
+    float step = 1.0f + (0.002f * err);
+
+    uint32_t tail = txRingTail;
+    for (size_t i = 0; i < n; i++) {
+        if ((txRingHead - tail) < 2) {
+            // Ran dry: silence until the buffer fills again
+            txPriming = true;
+            memset(&samples[i], 0, (n - i) * sizeof(int16_t));
+            break;
+        }
+
+        float a = txRing[tail & (TX_RING - 1)];
+        float b = txRing[(tail + 1) & (TX_RING - 1)];
+        samples[i] = saturate((a + ((b - a) * txFrac)) * g);
+
+        txFrac += step;
+        while (txFrac >= 1.0f) {
+            txFrac -= 1.0f;
+            tail++;
+        }
+    }
+
+    txRingTail = tail;
+}
+
+void usbAudio_flushTx()
+{
+    txRingTail = txRingHead;
+    txPriming = true;
+}
+
+void usbAudio_setPtt(bool on)
+{
+    hostPtt = on && initialized && configured && !suspended;
+}
+
+bool usbAudio_ptt()
+{
+    return hostPtt;
+}

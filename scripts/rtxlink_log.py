@@ -11,8 +11,9 @@ Console for the OpenRTX system log sent over USB with rtxlink.
     python3 scripts/rtxlink_log.py --level info     # less chatty
     python3 scripts/rtxlink_log.py --tag dmr --delta --out dmr.log
 
-The radio appears as a USB serial port (VID:PID 0483:5740, product
-"OpenRTX rtxlink"; /dev/cu.usbmodem* on macOS). The script waits for it,
+The radio appears as a USB device (VID:PID 0483:5740) with two serial ports,
+the log ("OpenRTX log", the first one: /dev/cu.usbmodem<serial>1 on macOS) and
+CAT control, and a sound card. The script waits for it,
 reconnects after a reboot, and keeps going until Ctrl-C.
 
 Output, one line per record:
@@ -206,11 +207,24 @@ class Printer:
 
 
 def find_port():
+    """
+    The radio's log port.  The radio also has a CAT port (same VID:PID): the
+    log port is interface 0, named "OpenRTX log"; where the name is not
+    reported, it is the one on interface 0, or the lower device name
+    (macOS: cu.usbmodem<serial>1 before ...3, Linux: ttyACM0 before 1).
+    """
     from serial.tools import list_ports
-    for p in list_ports.comports():
-        if p.vid == USB_VID and p.pid == USB_PID:
+    ports = [p for p in list_ports.comports()
+             if p.vid == USB_VID and p.pid == USB_PID]
+    if not ports:
+        return None
+    for p in ports:
+        if p.interface and 'log' in p.interface.lower():
             return p.device
-    return None
+    for p in ports:
+        if p.location and p.location.endswith('.0'):
+            return p.device
+    return sorted(p.device for p in ports)[0]
 
 
 def run_serial(args, printer, decoder):
