@@ -16,6 +16,10 @@
  * bits MSB first at offset 0, 9 or 18), so no de-interleaving is done here.
  */
 
+#ifdef CONFIG_USB_AUDIO_CS7000
+#include "usb_audio.h"
+#include "usb_voice_CS7000.h"
+#endif
 #include <pthread.h>
 #include <string.h>
 #include "core/audio_stream.h"
@@ -321,6 +325,12 @@ static void *decodeThread(void *arg)
             memset(buf, 0x00, FRAME_SAMPLES * sizeof(stream_sample_t));
         }
 
+#ifdef CONFIG_USB_AUDIO_CS7000
+        // The computer hears what the speaker plays
+        if (have)
+            usbVoice_rx(buf, FRAME_SAMPLES);
+#endif
+
         outputStream_sync(oStream, true);
     }
 
@@ -503,6 +513,35 @@ static void encodeMic()
     free(adcBuf);
 }
 
+#ifdef CONFIG_USB_AUDIO_CS7000
+/*
+ * Voice from the computer (a transmission it asked for over CAT): 48 kHz
+ * from the USB sound card, decimated to 8 kHz, paced by the computer.  The
+ * USB volume control sets the level; the microphone gain does not apply.
+ */
+static bool txFromUsb = false;
+
+static void encodeUsb()
+{
+    static int16_t pcm[FRAME_SAMPLES];
+
+    while (!txReqStop) {
+        // Nothing for 100 ms: the slot interrupt sends silence meanwhile
+        if (!usbVoice_tx(pcm, FRAME_SAMPLES, 100))
+            continue;
+
+        for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+            int32_t a = (pcm[i] < 0) ? -(int32_t)pcm[i] : pcm[i];
+            if (a > txPeak)
+                txPeak = (int16_t)((a > 32767) ? 32767 : a);
+        }
+
+        if (!encodeFrame(pcm))
+            txDropped++;
+    }
+}
+#endif
+
 static void *encodeThread(void *arg)
 {
     (void)arg;
@@ -523,6 +562,12 @@ static void *encodeThread(void *arg)
     txPeak = 0;
 
     const char *vocoder = txImbe ? "IMBE" : "AMBE+2";
+#ifdef CONFIG_USB_AUDIO_CS7000
+    if (txFromUsb) {
+        LOG_I("ambe", "encode thread started (USB audio, %s)", vocoder);
+        encodeUsb();
+    } else
+#endif
     if (txMicPath >= 0) {
         LOG_I("ambe", "encode thread started (microphone, %s)", vocoder);
         encodeMic();
@@ -547,10 +592,20 @@ static bool startTx(const uint8_t gainStep, const bool imbe)
 
     txImbe = imbe;
 
-    txMicPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
-    if (txMicPath < 0)
-        LOG_W("ambe", "no microphone path (%d), sending the test vowel",
-              txMicPath);
+#ifdef CONFIG_USB_AUDIO_CS7000
+    // A transmission the computer asked for takes its voice from the computer
+    txFromUsb = usbAudio_ptt();
+    if (txFromUsb) {
+        usbVoice_txStart();
+        txMicPath = -1;
+    } else
+#endif
+    {
+        txMicPath = audioPath_request(SOURCE_MIC, SINK_MCU, PRIO_TX);
+        if (txMicPath < 0)
+            LOG_W("ambe", "no microphone path (%d), sending the test vowel",
+                  txMicPath);
+    }
 
     txGain = (int32_t)CONFIG_MIC_GAIN
            * gainSteps[(gainStep < 9) ? gainStep : 4];
