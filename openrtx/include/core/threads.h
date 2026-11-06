@@ -18,6 +18,7 @@
 #define IMBE_THREAD_STKSIZE   8192
 #define AUDIO_THREAD_STKSIZE  512
 #define LOG_THREAD_STKSIZE    2048
+#define CAT_THREAD_STKSIZE    1536
 
 /**
  * Thread priority levels, UNIX-like: lower level, higher thread priority

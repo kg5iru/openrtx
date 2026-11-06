@@ -11,11 +11,13 @@
  * This enum describes the event message type:
  * - EVENT_KBD is used to send a keypress
  * - EVENT_STATUS is used to send a status change notification
+ * - EVENT_CAT is sent when CAT control changed the radio state
  */
 enum eventType_t
 {
     EVENT_KBD    = 0,
-    EVENT_STATUS = 1
+    EVENT_STATUS = 1,
+    EVENT_CAT    = 2
 };
 
 /**

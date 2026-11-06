@@ -22,6 +22,7 @@
 #include "core/gps.h"
 #include "core/voicePrompts.h"
 #include "core/log.h"
+#include "core/cat.h"
 
 #if defined(PLATFORM_TTWRPLUS)
 #include "pmu.h"
@@ -224,6 +225,26 @@ void *rtx_threadFunc(void *arg)
     return NULL;
 }
 
+#ifdef CONFIG_CAT
+/**
+ * \internal CAT thread: answers the CAT commands of a computer.  Normal
+ * priority, so that answers come within the few hundred milliseconds CAT
+ * programs wait for them.
+ */
+static void *cat_threadFunc(void *arg)
+{
+    (void) arg;
+
+    while(state.devStatus != SHUTDOWN)
+    {
+        cat_task(getTick());
+        sleepFor(0u, 5u);
+    }
+
+    return NULL;
+}
+#endif
+
 #ifdef CONFIG_LOG
 /**
  * \internal Log thread: formats queued log records and sends them over
@@ -302,5 +323,20 @@ void create_threads()
 
     pthread_t log_thread;
     pthread_create(&log_thread, &log_attr, log_threadFunc, NULL);
+    #endif
+
+    #ifdef CONFIG_CAT
+    pthread_attr_t cat_attr;
+    pthread_attr_init(&cat_attr);
+    pthread_attr_setstacksize(&cat_attr, CAT_THREAD_STKSIZE);
+
+    #ifdef _MIOSIX
+    struct sched_param cat_param;
+    cat_param.sched_priority = THREAD_PRIO_NORMAL;
+    pthread_attr_setschedparam(&cat_attr, &cat_param);
+    #endif
+
+    pthread_t cat_thread;
+    pthread_create(&cat_thread, &cat_attr, cat_threadFunc, NULL);
     #endif
 }
