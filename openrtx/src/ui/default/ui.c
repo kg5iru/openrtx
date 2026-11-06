@@ -3178,6 +3178,18 @@ void ui_updateFSM(bool *sync_rtx)
         // If we exit and re-enter the same menu, we want to ensure it speaks.
         if (msg.keys & KEY_ESC)
             _ui_reset_menu_anouncement_tracking();
+    } else if (event.type == EVENT_CAT) {
+        // CAT control changed the frequency in the radio state: apply it.  A
+        // memory channel becomes the VFO, as with a frequency typed in.
+        if (state.ui_screen == MAIN_MEM) {
+            state.vfo_channel = state.channel;
+            state.ui_screen = MAIN_VFO;
+        } else if (ui_state.last_main_state == MAIN_MEM) {
+            state.vfo_channel = state.channel;
+            ui_state.last_main_state = MAIN_VFO;
+        }
+        *sync_rtx = true;
+        _ui_exitStandby(now);
     } else if (event.type == EVENT_STATUS) {
 #ifdef CONFIG_GPS
         if ((state.ui_screen == MENU_GPS) && (!vp_isPlaying())
