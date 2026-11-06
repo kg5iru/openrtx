@@ -9,6 +9,9 @@
 #include <string.h>
 #include "rtx/rtx.h"
 #include "rtx/OpMode_FM.hpp"
+#ifdef CONFIG_USB_AUDIO_CS7000
+#include "OpMode_FM_CS7000.hpp"
+#endif
 #include "rtx/OpMode_M17.hpp"
 #ifdef CONFIG_DMR_CS7000
 #include "OpMode_DMR_CS7000.hpp"
@@ -31,7 +34,11 @@ static bool               reinitFilter; // Flag for RSSI filter re-initialisatio
 
 static OpMode  *currMode;               // Pointer to currently active opMode handler
 static OpMode     noMode;               // Empty opMode handler for opmode::NONE
+#ifdef CONFIG_USB_AUDIO_CS7000
+static OpMode_FM_CS7000 fmMode;         // FM with USB audio, CS7000-M17 Plus
+#else
 static OpMode_FM  fmMode;               // FM mode handler
+#endif
 #ifdef CONFIG_M17
 static OpMode_M17 m17Mode;              // M17 mode handler
 #endif
