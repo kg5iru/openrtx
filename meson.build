@@ -667,6 +667,13 @@ if get_option('rtxlink_log')
   # CAT control (Kenwood TS-2000 dialect) on the second USB serial port
   cs7000p_src += ['openrtx/src/core/cat.c', 'openrtx/src/core/cat_radio.c']
   cs7000p_def += {'CONFIG_CAT': ''}
+
+  # USB sound card: FM receive and transmit audio, and the digital voice
+  # modes' audio (with cs7000_ambe)
+  cs7000p_src += ['platform/drivers/baseband/OpMode_FM_CS7000.cpp',
+                  'platform/drivers/baseband/usb_voice_CS7000.cpp']
+  cs7000p_inc += ['platform/drivers/baseband']
+  cs7000p_def += {'CONFIG_USB_AUDIO_CS7000': ''}
 endif
 
 cs7000p_src += openrtx_src + stm32h743_src + miosix_cm7_src + ui_src_default
