@@ -12,6 +12,7 @@
 #include "calibration/calibInfo_CS7000.h"
 #include "drivers/SPI/spi_bitbang.h"
 #include "core/ctcssDetector.hpp"
+#include "radio_CS7000.h"
 #include "drivers/audio/stm32_adc.h"
 #include "hwconfig.h"
 #include <algorithm>
@@ -39,6 +40,7 @@ static struct rssiParams rssi;                 // RSSI curve parameters
 
 static enum opstatus radioStatus;               // Current operating status
 static bool analogTx = false;                   // HR_C6000 analog TX started
+static bool fmTxLineIn = false;                 // FM TX audio from the DAC
 #ifdef CONFIG_DMR_CS7000
 static uint8_t dmrSlotMode = 0;                 // HR_C6000 reg 0x10 as last written
 #endif
@@ -200,6 +202,11 @@ void radio_init(const rtxStatus_t *rtxState)
      * Set VCTXO bias
      */
     C6000.setModOffset(calData.errorRate[0]);
+}
+
+void radio_setFmTxLineIn(const bool lineIn)
+{
+    fmTxLineIn = lineIn;
 }
 
 void radio_terminate()
@@ -401,7 +408,9 @@ void radio_enableTx()
 
             FmConfig cfg = (config->bandwidth == BW_12_5) ? FmConfig::BW_12p5kHz
                                                           : FmConfig::BW_25kHz;
-            C6000.startAnalogTx(TxAudioSource::MIC, cfg | FmConfig::PREEMPH_EN);
+            TxAudioSource src = fmTxLineIn ? TxAudioSource::LINE_IN
+                                           : TxAudioSource::MIC;
+            C6000.startAnalogTx(src, cfg | FmConfig::PREEMPH_EN);
         }
             break;
 

@@ -202,6 +202,14 @@ bool audio_checkPathCompatibility(const enum AudioSource p1Source,
                                   const enum AudioSink   p2Sink)
 
 {
+    // The receiver's audio goes to the speaker through the HR_C6000 and to
+    // the MCU through the ADC (USB audio): both at once are fine
+    bool rtxSplit = (p1Source == SOURCE_RTX) && (p2Source == SOURCE_RTX)
+                 && (((p1Sink == SINK_SPK) && (p2Sink == SINK_MCU))
+                     || ((p1Sink == SINK_MCU) && (p2Sink == SINK_SPK)));
+    if(rtxSplit)
+        return true;
+
     if(p1Source == p2Source)
         return false;
 
