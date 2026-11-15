@@ -45,6 +45,43 @@ static size_t beepIncr;
 static struct streamCtx *stream;
 static pthread_mutex_t  mutex;
 static pthread_cond_t   wakeup_cond;
+static volatile uint16_t streamGain = 256;  // Q8, 256 = unity
+
+/*
+ * Gain, then soft limiting above half of full scale: the part above the knee
+ * is mapped by x / (1 + x / range), which keeps the slope at the knee and
+ * approaches full scale without reaching it.
+ */
+static inline stream_sample_t applyGain(const stream_sample_t sample,
+                                        const uint16_t gain)
+{
+    const int32_t knee  = 16384;
+    const int32_t range = 32767 - knee;
+
+    int32_t v = (static_cast< int32_t >(sample) * gain) / 256;
+    int32_t a = (v < 0) ? -v : v;
+    if(a > knee)
+    {
+        int64_t over = a - knee;
+        a = knee + static_cast< int32_t >((over * range) / (range + over));
+    }
+
+    return static_cast< stream_sample_t >((v < 0) ? -a : a);
+}
+
+// Gain, then the big endian order the HR_Cx000 DAC requires
+static void prepareSamples(stream_sample_t *buf, const size_t len)
+{
+    const uint16_t gain = streamGain;
+
+    for(size_t i = 0; i < len; i++)
+    {
+        stream_sample_t tmp = buf[i];
+        if(gain != 256)
+            tmp = applyGain(tmp, gain);
+        buf[i] = __builtin_bswap16(tmp);
+    }
+}
 
 static inline void stopStream()
 {
@@ -169,6 +206,11 @@ void Cx000dac_stopBeep()
     funcMode = DAC_OFF;
 }
 
+void Cx000dac_setStreamGain(const uint16_t gainQ8)
+{
+    streamGain = (gainQ8 > 4096) ? 4096 : gainQ8;
+}
+
 static int Cx000dac_start(const uint8_t instance, const void *config,
                           struct streamCtx *ctx)
 {
@@ -195,12 +237,7 @@ static int Cx000dac_start(const uint8_t instance, const void *config,
     readPos   = 0;
     stream    = ctx;
 
-    // HR_Cx000 DAC requires data to be in big endian format
-    for(size_t i = 0; i < ctx->bufSize; i++)
-    {
-        stream_sample_t tmp = ctx->buffer[i];
-        ctx->buffer[i] = __builtin_bswap16(tmp);
-    }
+    prepareSamples(ctx->buffer, ctx->bufSize);
 
     // Set the "OpenMusic" bit
     c6000->writeCfgRegister(0x06, 0x22);
@@ -244,12 +281,7 @@ static int Cx000dac_sync(struct streamCtx *ctx, uint8_t dirty)
     {
         stream_sample_t *ptr;
         Cx000dac_idleBuf(ctx, &ptr);
-
-        for(size_t i = 0; i < ctx->bufSize/2; i++)
-        {
-            stream_sample_t tmp = ptr[i];
-            ptr[i] = __builtin_bswap16(tmp);
-        }
+        prepareSamples(ptr, ctx->bufSize/2);
     }
 
     pthread_mutex_lock(&mutex);

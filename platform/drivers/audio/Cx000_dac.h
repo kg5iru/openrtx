@@ -36,6 +36,16 @@ int Cx000dac_startBeep(const uint16_t freq);
  */
 void Cx000dac_stopBeep();
 
+/**
+ * Set a gain applied to the samples of the output streams (not to the
+ * beeps).  Above half of full scale the samples go through a soft limiter,
+ * so that a gain larger than the headroom compresses the peaks instead of
+ * clipping them.  Default: unity.
+ *
+ * @param gainQ8: gain, 256 = unity, up to 4096 (+24 dB).
+ */
+void Cx000dac_setStreamGain(const uint16_t gainQ8);
+
 #ifdef __cplusplus
 }   // extern "C"
 
