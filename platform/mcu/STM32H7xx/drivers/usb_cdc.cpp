@@ -52,7 +52,7 @@
 #define EP0_SIZE 64
 #define DATA_SIZE 64
 #define NOTIF_SIZE 8
-#define NUM_EPS 6 // EP0 .. EP5
+#define NUM_EPS 8 // EP0 .. EP7
 
 #define AUDIO_EP 5
 #define AUDIO_MPS 100 // bytes: up to 50 samples per frame
@@ -66,11 +66,15 @@
 #define TX3_FIFO_WORDS 32  // CAT port data
 #define TX4_FIFO_WORDS 16
 #define TX5_FIFO_WORDS 64  // audio: two packets
+#define TX6_FIFO_WORDS 32  // Bluetooth bridge data
+#define TX7_FIFO_WORDS 16
 
-#define LOG_TX_RING 2048   // powers of two
+#define LOG_TX_RING 2048 // powers of two
 #define LOG_RX_RING 256
 #define CAT_TX_RING 512
 #define CAT_RX_RING 256
+#define BT_TX_RING 512
+#define BT_RX_RING 256
 
 #define USB_VID 0x0483
 #define USB_PID 0x5740
@@ -109,8 +113,8 @@ static const uint8_t devDesc[] = {
     USB_VID >> 8,
     USB_PID & 0xFF,
     USB_PID >> 8,
-    0x00,
-    0x02, // bcdDevice 2.00: composite (1.00 was the log port alone)
+    0x10,
+    0x02, // bcdDevice 2.10: Bluetooth port added (2.00 without, 1.00 log only)
     1,
     2,
     3, // manufacturer, product, serial strings
@@ -121,6 +125,7 @@ static const uint8_t devDesc[] = {
 #define STR_LOG 4
 #define STR_CAT 5
 #define STR_AUDIO 6
+#define STR_BT 7
 
 /*
  * One CDC-ACM function: interface association, communication interface with
@@ -159,12 +164,12 @@ static const uint8_t devDesc[] = {
         (epAddr), (epAttr), AUDIO_MPS, 0, 1, 0, 0, /* endpoint */             \
         7, 0x25, 0x01, 0x00, 0, 0, 0               /* class endpoint */
 
-#define CFG_LEN (9 + (2 * CDC_FUNCTION_LEN) + AUDIO_FUNCTION_LEN)
+#define CFG_LEN (9 + (3 * CDC_FUNCTION_LEN) + AUDIO_FUNCTION_LEN)
 
 // clang-format off
 static const uint8_t cfgDesc[] = {
     9, 2, CFG_LEN & 0xFF, CFG_LEN >> 8, // CONFIGURATION
-    7, 1, 0,                            // 7 interfaces, value 1, no string
+    9, 1, 0,                            // 9 interfaces, value 1, no string
     0xC0, 50,                           // self powered, 100 mA
 
     CDC_FUNCTION(0, 2, 1, STR_LOG),
@@ -185,14 +190,17 @@ static const uint8_t cfgDesc[] = {
 
     AS_INTERFACE(5, AC_IT_USB, AUDIO_EP, 0x09),        // OUT, adaptive
     AS_INTERFACE(6, AC_OT_USB, 0x80 | AUDIO_EP, 0x05), // IN, asynchronous
+
+    // Bluetooth module bridge, last so that the other ports keep their names
+    CDC_FUNCTION(7, 7, 6, STR_BT),
 };
 // clang-format on
 
 static_assert(sizeof(cfgDesc) == CFG_LEN, "configuration descriptor length");
 
-static const char *const strings[] = { "OpenRTX", "OpenRTX radio",
-                                       "OpenRTX log", "OpenRTX CAT",
-                                       "OpenRTX audio" };
+static const char *const strings[] = { "OpenRTX",       "OpenRTX radio",
+                                       "OpenRTX log",   "OpenRTX CAT",
+                                       "OpenRTX audio", "OpenRTX Bluetooth" };
 
 // Serial ports ---------------------------------------------------------------
 
@@ -218,15 +226,19 @@ struct Port {
 
 static uint8_t logTx[LOG_TX_RING], logRx[LOG_RX_RING];
 static uint8_t catTx[CAT_TX_RING], catRx[CAT_RX_RING];
+static uint8_t btTx[BT_TX_RING], btRx[BT_RX_RING];
 
 // clang-format off
-static Port ports[2] = {
+static Port ports[3] = {
     { 0, 1, 2, true, logTx, LOG_TX_RING, logRx, LOG_RX_RING,
       0, 0, false, false, 0, 0, false, false,
       { 0x00, 0xC2, 0x01, 0x00, 0, 0, 8 } },  // 115200 8N1
     { 2, 3, 4, false, catTx, CAT_TX_RING, catRx, CAT_RX_RING,
       0, 0, false, false, 0, 0, false, false,
       { 0x80, 0x25, 0x00, 0x00, 0, 0, 8 } },  // 9600 8N1
+    { 7, 6, 7, true, btTx, BT_TX_RING, btRx, BT_RX_RING,
+      0, 0, false, false, 0, 0, false, false,
+      { 0x00, 0x96, 0x00, 0x00, 0, 0, 8 } },  // 38400 8N1, as the module
 };
 // clang-format on
 
@@ -1049,7 +1061,7 @@ static void handleSetup()
         case 0x0A: // GET_INTERFACE
         {
             uint8_t intf = wIndex & 0xFF;
-            if (intf > 6)
+            if (intf > 8)
                 break;
             ep0Buf[0] = (intf == 5) ? altTx : ((intf == 6) ? altRx : 0);
             ep0Send(ep0Buf, 1);
@@ -1063,7 +1075,7 @@ static void handleSetup()
                 if (wValue > 1)
                     break;
                 setAudioAlt(intf, wValue);
-            } else if ((intf > 6) || (wValue != 0)) {
+            } else if ((intf > 8) || (wValue != 0)) {
                 break;
             }
 
@@ -1375,7 +1387,8 @@ static int usbInit()
     // FIFO RAM: receive FIFO, then one transmit FIFO per IN endpoint
     static const uint16_t txWords[NUM_EPS] = { TX0_FIFO_WORDS, TX1_FIFO_WORDS,
                                                TX2_FIFO_WORDS, TX3_FIFO_WORDS,
-                                               TX4_FIFO_WORDS, TX5_FIFO_WORDS };
+                                               TX4_FIFO_WORDS, TX5_FIFO_WORDS,
+                                               TX6_FIFO_WORDS, TX7_FIFO_WORDS };
     uint32_t start = RX_FIFO_WORDS;
     CORE->GRXFSIZ = RX_FIFO_WORDS;
     CORE->DIEPTXF0_HNPTXFSIZ = (txWords[0] << 16) | start;
@@ -1517,6 +1530,11 @@ bool usbcat_connected()
     return initialized && portOpen(&ports[1]);
 }
 
+bool usbbt_connected()
+{
+    return initialized && portOpen(&ports[2]);
+}
+
 // Positional initializers: designated ones are C++20
 static const struct chardev_api usbcdc_api = { usbcdc_init, usbcdc_terminate,
                                                usbcdc_read, usbcdc_write,
@@ -1527,6 +1545,9 @@ const struct chardev usb_cdc_chardev = { NULL, // config
 
 const struct chardev usb_cat_chardev = { NULL, // config
                                          &ports[1], &usbcdc_api };
+
+const struct chardev usb_bt_chardev = { NULL, // config
+                                        &ports[2], &usbcdc_api };
 
 // Audio API ------------------------------------------------------------------
 

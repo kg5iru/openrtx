@@ -41,7 +41,7 @@ alignas(8) static uint8_t usbMem[0x1000];
 static const uint8_t fakeUid[12] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
                                      0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC };
 
-static std::vector<uint32_t> inFifo[6]; // words written per IN endpoint
+static std::vector<uint32_t> inFifo[8]; // words written per IN endpoint
 static std::deque<uint32_t> rxFifo;     // words the core would hand over
 
 struct FifoPort {
@@ -83,6 +83,7 @@ extern "C" void delayMs(unsigned int)
 // Port shorthands
 static Port &logPort = ports[0];
 static Port &catPort = ports[1];
+static Port &btPort = ports[2];
 
 // Helpers ------------------------------------------------------------------
 
@@ -257,7 +258,7 @@ int main()
     setupReq(0x80, 6, 0x0200, 0, 9);
     d = takeEp0();
     CHECK(d.size() == 9 && (d[2] | (d[3] << 8)) == CFG_LEN);
-    CHECK(d[4] == 7); // interfaces
+    CHECK(d[4] == 9); // interfaces
     setupReq(0x80, 6, 0x0200, 0, 0xFFFF);
     d = takeEp0(&pkts);
     CHECK(d.size() == CFG_LEN && pkts == (CFG_LEN + 63) / 64);
@@ -287,7 +288,7 @@ int main()
             pos += len;
         }
         CHECK(pos == CFG_LEN);
-        CHECK(intfs == 7 && iads == 3 && eps == 8);
+        CHECK(intfs == 9 && iads == 4 && eps == 11);
         CHECK(acTotal == AC_CLASS_LEN && acSeen == AC_CLASS_LEN);
     }
 
@@ -319,19 +320,20 @@ int main()
     CHECK(str(STR_LOG) == "OpenRTX log");
     CHECK(str(STR_CAT) == "OpenRTX CAT");
     CHECK(str(STR_AUDIO) == "OpenRTX audio");
+    CHECK(str(STR_BT) == "OpenRTX Bluetooth");
 
     // Device qualifier: full-speed device, must STALL; next SETUP still works
     setupReq(0x80, 6, 0x0600, 0, 10);
     CHECK(stalled());
-    setupReq(0x80, 6, 0x0307, 0, 255); // no such string
+    setupReq(0x80, 6, 0x0308, 0, 255); // no such string
     CHECK(stalled());
     setupReq(0x40, 0x01, 0, 0, 0);     // vendor request
     CHECK(stalled());
 
-    // SET_CONFIGURATION 1: both ports' endpoints come up, OUT armed
+    // SET_CONFIGURATION 1: all ports' endpoints come up, OUT armed
     setupReq(0x00, 9, 1, 0, 0);
     CHECK(configured);
-    for (Port *p : { &logPort, &catPort }) {
+    for (Port *p : { &logPort, &catPort, &btPort }) {
         uint8_t ep = p->dataEp;
         CHECK(INEP(ep)->DIEPCTL & USB_OTG_DIEPCTL_USBAEP);
         CHECK(((INEP(ep)->DIEPCTL & USB_OTG_DIEPCTL_EPTYP)
@@ -347,7 +349,8 @@ int main()
         CHECK(outArmed(ep));
         CHECK((OUTEP(ep)->DOEPTSIZ & USB_OTG_DOEPTSIZ_XFRSIZ) == 64);
     }
-    CHECK(logPort.dataEp == 1 && catPort.dataEp == 3);
+    CHECK(logPort.dataEp == 1 && catPort.dataEp == 3 && btPort.dataEp == 6);
+    CHECK(btPort.notifEp == 7 && btPort.commIf == 7);
     setupReq(0x80, 8, 0, 0, 1);
     d = takeEp0();
     CHECK(d.size() == 1 && d[0] == 1);
@@ -450,6 +453,26 @@ int main()
     CHECK(memcmp(rbuf, cmd, 10) == 0);
     CHECK(usb_cat_chardev.api->read(&usb_cat_chardev, rbuf, sizeof(rbuf)) == 3);
     CHECK(memcmp(rbuf, "IF;", 3) == 0);
+
+    // Bluetooth bridge port: DTR-gated like the log port, own endpoints
+    CHECK(!usbbt_connected());
+    CHECK(usb_bt_chardev.api->write(&usb_bt_chardev, "I*IF\r", 5) == -ENOTCONN);
+    setupReq(0x21, 0x22, 0x0001, 7, 0); // DTR on interface 7
+    CHECK(usbbt_connected() && btPort.dtr);
+    CHECK(usb_bt_chardev.api->write(&usb_bt_chardev, "I*IF\r", 5) == 5);
+    d = takeIn(6);
+    CHECK(d.size() == 5 && memcmp(d.data(), "I*IF\r", 5) == 0);
+    CHECK(inFifo[1].empty() && inFifo[3].empty());
+    inComplete(6);
+    CHECK(!btPort.txBusy);
+    pushRx(6, PKT_OUT_DATA, (const uint8_t *)"AT*I\r", 5);
+    outComplete(6);
+    CHECK(outArmed(6));
+    CHECK(usb_bt_chardev.api->read(&usb_bt_chardev, rbuf, sizeof(rbuf)) == 5);
+    CHECK(memcmp(rbuf, "AT*I\r", 5) == 0);
+    CHECK(usb_cat_chardev.api->read(&usb_cat_chardev, rbuf, sizeof(rbuf)) == 0);
+    setupReq(0x21, 0x22, 0x0000, 7, 0);
+    CHECK(!usbbt_connected());
 
     // Flow control: fill the 256-byte ring, the endpoint stays NAKed until
     // read() makes room for a full packet
