@@ -232,6 +232,7 @@ static unsigned framesDecoded = 0;
 static unsigned errTotal = 0;
 static unsigned badFrames = 0;
 static unsigned gaps = 0;
+static int32_t rxPeak = 0; // Largest decoded sample, to check the level
 
 static void *decodeThread(void *arg)
 {
@@ -310,6 +311,13 @@ static void *decodeThread(void *arg)
 
         if (have) {
             framesDecoded++;
+            for (size_t i = 0; i < FRAME_SAMPLES; i++) {
+                int32_t a = buf[i];
+                if (a < 0)
+                    a = -a;
+                if (a > rxPeak)
+                    rxPeak = a;
+            }
             /*
              * Frames resumed after running dry for less than 300 ms: those
              * 20 ms buffers were a gap in the audio.  (Up to v39 the dry
@@ -337,8 +345,8 @@ static void *decodeThread(void *arg)
     audioStream_stop(oStream);
     LOG_I("ambe",
           "decode thread stopped: %u frames, %u errors, %u bad, "
-          "%u gaps",
-          framesDecoded, errTotal, badFrames, gaps);
+          "%u gaps, peak %ld",
+          framesDecoded, errTotal, badFrames, gaps, (long)rxPeak);
     running = false;
     return NULL;
 }
