@@ -145,6 +145,9 @@ enum settingsRadioItems {
     R_OFFSET,
     R_DIRECTION,
     R_STEP,
+#ifdef CONFIG_SPK_GAIN
+    R_SPK_GAIN,
+#endif
 };
 
 enum modeItems {

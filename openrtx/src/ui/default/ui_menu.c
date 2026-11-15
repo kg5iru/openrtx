@@ -350,6 +350,15 @@ int _ui_getRadioValueName(char *buf, uint8_t max_len, uint8_t index)
         return 0;
     }
 
+#ifdef CONFIG_SPK_GAIN
+    // Speaker gain in dB, 1.5 dB per step
+    if (index == R_SPK_GAIN) {
+        uint8_t g = settings_spkGain(&last_state.settings);
+        sniprintf(buf, max_len, "+%d.%d dB", (g * 3) / 2, (g & 1) ? 5 : 0);
+        return 0;
+    }
+#endif
+
     // Return an x.y string
     uint32_t value = 0;
     switch (index) {

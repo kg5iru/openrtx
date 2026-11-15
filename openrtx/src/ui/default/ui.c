@@ -172,6 +172,9 @@ const char *settings_radio_items[] = {
     "Offset",
     "Direction",
     "Step",
+#ifdef CONFIG_SPK_GAIN
+    "Speaker Gain",
+#endif
 };
 
 const char *settings_m17_items[] = { "Callsign", "Meta Txt", "CAN",
@@ -2458,6 +2461,23 @@ void ui_updateFSM(bool *sync_rtx)
                                 state.step_index %= n_freq_steps;
                             }
                             break;
+#ifdef CONFIG_SPK_GAIN
+                        case R_SPK_GAIN: {
+                            uint8_t g = settings_spkGain(&state.settings);
+                            if ((msg.keys & KEY_UP || msg.keys & KEY_RIGHT
+                                 || msg.keys & KNOB_RIGHT)
+                                && (g < SPK_GAIN_MAX)) {
+                                state.settings.spk_gain = g + 1;
+                                *sync_rtx = true;
+                            } else if ((msg.keys & KEY_DOWN
+                                        || msg.keys & KEY_LEFT
+                                        || msg.keys & KNOB_LEFT)
+                                       && (g > SPK_GAIN_MIN)) {
+                                state.settings.spk_gain = g - 1;
+                                *sync_rtx = true;
+                            }
+                        } break;
+#endif
                         default:
                             state.ui_screen = SETTINGS_RADIO;
                     }
