@@ -46,7 +46,8 @@ static size_t lineLen;
 static bool lineOverflow;
 static long long lastLineTime; // last complete line from the module
 
-extern "C" void USART1_IRQHandler()
+// C++ linkage, as the vector table in the STM32H7 startup code declares it
+void USART1_IRQHandler()
 {
     uint32_t isr = USART1->ISR;
 
