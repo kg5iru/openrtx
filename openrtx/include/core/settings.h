@@ -88,6 +88,7 @@ typedef struct
 #endif
 #ifdef CONFIG_SPK_GAIN
     uint8_t spk_gain;             // Speaker gain step, 0 = not set (default)
+    uint8_t voice_gain;           // Digital voice gain step + 1, 0 = default
 #endif
 }
 __attribute__((packed)) settings_t;
@@ -177,6 +178,7 @@ static const settings_t default_settings =
 #endif
 #ifdef CONFIG_SPK_GAIN
     0,                            // Speaker gain not set (default)
+    0,                            // Digital voice gain not set (default)
 #endif
 };
 
@@ -294,7 +296,7 @@ static inline uint16_t settings_nxdnTg(const settings_t *s)
  * as erased flash (0xFF), which mean the default.
  */
 #define SPK_GAIN_MIN 1
-#define SPK_GAIN_MAX 12
+#define SPK_GAIN_MAX 31
 #define SPK_GAIN_DEFAULT 8
 
 static inline uint8_t settings_spkGain(const settings_t *s)
@@ -302,6 +304,22 @@ static inline uint8_t settings_spkGain(const settings_t *s)
     if ((s->spk_gain < SPK_GAIN_MIN) || (s->spk_gain > SPK_GAIN_MAX))
         return SPK_GAIN_DEFAULT;
     return s->spk_gain;
+}
+
+/*
+ * Digital voice gain: applied to the decoded voice (and the voice prompts)
+ * before the audio DAC, with a soft limiter, in 3 dB steps from 0 dB (step
+ * 0) to +24 dB (step VOICE_GAIN_STEPS - 1).  Stored plus one, so that 0 or
+ * erased flash mean the default.
+ */
+#define VOICE_GAIN_STEPS 9
+#define VOICE_GAIN_DEFAULT 4
+
+static inline uint8_t settings_voiceGain(const settings_t *s)
+{
+    if ((s->voice_gain == 0) || (s->voice_gain > VOICE_GAIN_STEPS))
+        return VOICE_GAIN_DEFAULT;
+    return s->voice_gain - 1;
 }
 #endif
 

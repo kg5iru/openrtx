@@ -134,6 +134,7 @@ void *ui_threadFunc(void *arg)
             #endif
             #ifdef CONFIG_SPK_GAIN
             rtx_cfg.spkGain = settings_spkGain(&state.settings);
+            rtx_cfg.voiceGain = settings_voiceGain(&state.settings);
             #endif
 
             pthread_mutex_unlock(&rtx_mutex);

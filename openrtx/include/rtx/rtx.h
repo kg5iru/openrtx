@@ -93,6 +93,7 @@ typedef struct
 #endif
 #ifdef CONFIG_SPK_GAIN
     uint8_t  spkGain;                  /**< Speaker DAC gain step       */
+    uint8_t  voiceGain;                /**< Digital voice gain, 3 dB/step */
 #endif
 }
 rtxStatus_t;
