@@ -1383,6 +1383,11 @@ cat_test = executable('cat_test',
                       sources : unit_test_src + ['openrtx/src/core/cat.c', 'tests/unit/CAT_kenwood.cpp'],
                       kwargs  : unit_test_opts)
 
+bt_cs7000_test = executable('bt_cs7000_test',
+                            sources : unit_test_src + ['platform/drivers/bluetooth/bt_proto_CS7000.c',
+                                                       'tests/unit/BT_cs7000_proto.cpp'],
+                            kwargs  : unit_test_opts)
+
 nxdn_frame_test = executable('nxdn_frame_test',
                              sources : unit_test_src + nxdn_src + ['tests/unit/NXDN_frame.cpp'],
                              kwargs  : unit_test_opts)
@@ -1396,6 +1401,7 @@ test('YSF Frame Unit Test',   ysf_frame_test)
 test('YSF Demodulator Test',  ysf_demodulator_test)
 test('NXDN Frame Unit Test',  nxdn_frame_test)
 test('CAT Kenwood Test',      cat_test)
+test('CS7000 Bluetooth Protocol Test', bt_cs7000_test)
 test('NXDN Demodulator Test', nxdn_demodulator_test)
 test('M17 Viterbi Unit Test', m17_viterbi_test)
 test('M17 Demodulator Test',  m17_demodulator_test)
