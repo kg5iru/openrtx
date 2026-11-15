@@ -132,6 +132,9 @@ void *ui_threadFunc(void *arg)
             rtx_cfg.nxdnId  = settings_nxdnId(&state.settings);
             rtx_cfg.nxdnTg  = settings_nxdnTg(&state.settings);
             #endif
+            #ifdef CONFIG_SPK_GAIN
+            rtx_cfg.spkGain = settings_spkGain(&state.settings);
+            #endif
 
             pthread_mutex_unlock(&rtx_mutex);
 

@@ -86,6 +86,9 @@ typedef struct
     uint16_t nxdn_id;             // Own NXDN unit ID, 0 = not set (no TX)
     uint16_t nxdn_tg;             // NXDN talkgroup called, 0 = not set (10)
 #endif
+#ifdef CONFIG_SPK_GAIN
+    uint8_t spk_gain;             // Speaker gain step, 0 = not set (default)
+#endif
 }
 __attribute__((packed)) settings_t;
 
@@ -171,6 +174,9 @@ static const settings_t default_settings =
     0,                            // Any NXDN RAN
     0,                            // NXDN ID not set
     0,                            // NXDN talkgroup not set
+#endif
+#ifdef CONFIG_SPK_GAIN
+    0,                            // Speaker gain not set (default)
 #endif
 };
 
@@ -277,6 +283,25 @@ static inline uint16_t settings_nxdnTg(const settings_t *s)
     if ((s->nxdn_tg == 0) || (s->nxdn_tg > NXDN_ID_MAX))
         return NXDN_TG_DEFAULT;
     return s->nxdn_tg;
+}
+#endif
+
+#ifdef CONFIG_SPK_GAIN
+/*
+ * Speaker gain: the baseband's audio DAC gain, in its steps of 1.5 dB
+ * (nominal), from SPK_GAIN_MIN to SPK_GAIN_MAX.  It sets the level ahead of
+ * the volume control.  Settings saved by an older build read back as 0 or
+ * as erased flash (0xFF), which mean the default.
+ */
+#define SPK_GAIN_MIN 1
+#define SPK_GAIN_MAX 12
+#define SPK_GAIN_DEFAULT 8
+
+static inline uint8_t settings_spkGain(const settings_t *s)
+{
+    if ((s->spk_gain < SPK_GAIN_MIN) || (s->spk_gain > SPK_GAIN_MAX))
+        return SPK_GAIN_DEFAULT;
+    return s->spk_gain;
 }
 #endif
 

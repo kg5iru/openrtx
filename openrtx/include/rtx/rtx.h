@@ -91,6 +91,9 @@ typedef struct
     uint16_t nxdnId;                   /**< Own NXDN ID, 0 = not set    */
     uint16_t nxdnTg;                   /**< NXDN talkgroup called       */
 #endif
+#ifdef CONFIG_SPK_GAIN
+    uint8_t  spkGain;                  /**< Speaker DAC gain step       */
+#endif
 }
 rtxStatus_t;
 
