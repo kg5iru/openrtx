@@ -22,6 +22,9 @@
 #include "drivers/baseband/AK2365A.h"
 #ifdef PLATFORM_CS7000P
 #include "drivers/baseband/dmr_CS7000.h"
+#ifdef CONFIG_SPK_GAIN
+#include "core/settings.h"
+#endif
 #endif
 
 #ifdef PLATFORM_CS7000P
@@ -492,6 +495,25 @@ void radio_updateConfiguration()
     }
     C6000.writeCfgRegister(0x45, qAmp);   // Adjustment of Mod2 amplitude
     C6000.writeCfgRegister(0x46, iAmp);   // Adjustment of Mod1 amplitude
+
+#ifdef CONFIG_SPK_GAIN
+    /*
+     * Speaker level: the HR_C6000 audio DAC gain, reg 0x37, which drives
+     * LINEOUT ahead of the volume control (LINEOUT, buffer IC610, VOL_OUT,
+     * volume potentiometer, AF_PA), for FM and for the digital modes' I2S
+     * audio alike.  Positive gains are 0xC0 | step, 1.5 dB per step.
+     * fmMode() writes +1 step.  The stock firmware sets it per channel load
+     * (fn 0x0802D018) from two gain bytes of its settings, through tables
+     * reaching +12 steps on analog channels (0xCC, table 0x080F4FE8) and
+     * +9 on digital ones (table 0x080F4FD8 plus 8 steps).
+     */
+    uint8_t spkGain = config->spkGain;
+    if(spkGain < SPK_GAIN_MIN)
+        spkGain = SPK_GAIN_MIN;
+    if(spkGain > SPK_GAIN_MAX)
+        spkGain = SPK_GAIN_MAX;
+    C6000.writeCfgRegister(0x37, 0xC0 | spkGain);
+#endif
 
     // Two-point bias (VCXO trim): the stock firmware's channel load takes it
     // from calibration byte 0x1174 (fn 0x080537AC, called from 0x0804BEE6),
