@@ -174,6 +174,7 @@ const char *settings_radio_items[] = {
     "Step",
 #ifdef CONFIG_SPK_GAIN
     "Speaker Gain",
+    "Voice Gain",
 #endif
 };
 
@@ -2474,6 +2475,22 @@ void ui_updateFSM(bool *sync_rtx)
                                         || msg.keys & KNOB_LEFT)
                                        && (g > SPK_GAIN_MIN)) {
                                 state.settings.spk_gain = g - 1;
+                                *sync_rtx = true;
+                            }
+                        } break;
+                        case R_VOICE_GAIN: {
+                            // Stored plus one, see settings_voiceGain()
+                            uint8_t g = settings_voiceGain(&state.settings);
+                            if ((msg.keys & KEY_UP || msg.keys & KEY_RIGHT
+                                 || msg.keys & KNOB_RIGHT)
+                                && (g + 1 < VOICE_GAIN_STEPS)) {
+                                state.settings.voice_gain = g + 2;
+                                *sync_rtx = true;
+                            } else if ((msg.keys & KEY_DOWN
+                                        || msg.keys & KEY_LEFT
+                                        || msg.keys & KNOB_LEFT)
+                                       && (g > 0)) {
+                                state.settings.voice_gain = g;
                                 *sync_rtx = true;
                             }
                         } break;

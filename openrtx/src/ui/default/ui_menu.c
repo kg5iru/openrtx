@@ -357,6 +357,13 @@ int _ui_getRadioValueName(char *buf, uint8_t max_len, uint8_t index)
         sniprintf(buf, max_len, "+%d.%d dB", (g * 3) / 2, (g & 1) ? 5 : 0);
         return 0;
     }
+
+    // Digital voice gain, 3 dB per step
+    if (index == R_VOICE_GAIN) {
+        uint8_t g = settings_voiceGain(&last_state.settings);
+        sniprintf(buf, max_len, "+%d dB", g * 3);
+        return 0;
+    }
 #endif
 
     // Return an x.y string

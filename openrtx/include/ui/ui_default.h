@@ -147,6 +147,7 @@ enum settingsRadioItems {
     R_STEP,
 #ifdef CONFIG_SPK_GAIN
     R_SPK_GAIN,
+    R_VOICE_GAIN,
 #endif
 };
 
