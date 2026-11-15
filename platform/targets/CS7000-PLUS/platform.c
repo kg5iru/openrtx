@@ -24,6 +24,9 @@
 #include "usb_audio.h"
 #endif
 #endif
+#ifdef CONFIG_BLUETOOTH
+#include "drivers/bluetooth/bt_CS7000.h"
+#endif
 
 static const hwInfo_t hwInfo =
 {
@@ -67,6 +70,11 @@ static void startLog()
     #ifdef CONFIG_CAT
     // Second port of the same USB device, already started
     cat_init(&usb_cat_chardev, &cat_radio);
+    #endif
+
+    #ifdef CONFIG_BLUETOOTH
+    // Third port of the same USB device: bridge to the Bluetooth module
+    btCs7000_init();
     #endif
 }
 #endif
