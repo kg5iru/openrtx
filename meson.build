@@ -675,6 +675,12 @@ if get_option('rtxlink_log')
                   'platform/drivers/baseband/usb_voice_CS7000.cpp']
   cs7000p_inc += ['platform/drivers/baseband']
   cs7000p_def += {'CONFIG_USB_AUDIO_CS7000': ''}
+
+  # Bluetooth module: power-up, headset link, PTT decoding, and a bridge to
+  # the module's UART on the third USB serial port
+  cs7000p_src += ['platform/drivers/bluetooth/bt_CS7000.cpp',
+                  'platform/drivers/bluetooth/bt_proto_CS7000.c']
+  cs7000p_def += {'CONFIG_BLUETOOTH': ''}
 endif
 
 cs7000p_src += openrtx_src + stm32h743_src + miosix_cm7_src + ui_src_default
