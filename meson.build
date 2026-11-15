@@ -633,7 +633,8 @@ cs7000p_src = ['platform/drivers/NVM/nvmem_CS7000.c',
                'platform/targets/CS7000-PLUS/platform.c']
 
 cs7000p_inc = ['platform/targets/CS7000-PLUS']
-cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime', 'CONFIG_P25': ''}
+cs7000p_def = {'PLATFORM_CS7000P': '', 'timegm': 'mktime', 'CONFIG_P25': '',
+               'CONFIG_SPK_GAIN': ''}
 
 # Optional AMBE+2 vocoder glue.  The codec itself is not part of OpenRTX: it is
 # extracted from the user's own Connect Systems firmware, see
