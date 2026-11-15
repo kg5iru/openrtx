@@ -24,6 +24,7 @@
 #include "drivers/baseband/dmr_CS7000.h"
 #ifdef CONFIG_SPK_GAIN
 #include "core/settings.h"
+#include "drivers/audio/Cx000_dac.h"
 #endif
 #endif
 
@@ -501,8 +502,9 @@ void radio_updateConfiguration()
      * Speaker level: the HR_C6000 audio DAC gain, reg 0x37, which drives
      * LINEOUT ahead of the volume control (LINEOUT, buffer IC610, VOL_OUT,
      * volume potentiometer, AF_PA), for FM and for the digital modes' I2S
-     * audio alike.  Positive gains are 0xC0 | step, 1.5 dB per step.
-     * fmMode() writes +1 step.  The stock firmware sets it per channel load
+     * audio alike.  Positive gains are 0xC0 | step, 1.5 dB per step (nominal),
+     * up to 0xDF, the stock firmware's maximum (fn 0x0806BFE0 maps a level
+     * 1..63 to 0x81..0x9F, 0xC1..0xDF).  fmMode() writes +1 step.  The stock firmware sets it per channel load
      * (fn 0x0802D018) from two gain bytes of its settings, through tables
      * reaching +12 steps on analog channels (0xCC, table 0x080F4FE8) and
      * +9 on digital ones (table 0x080F4FD8 plus 8 steps).
@@ -513,6 +515,22 @@ void radio_updateConfiguration()
     if(spkGain > SPK_GAIN_MAX)
         spkGain = SPK_GAIN_MAX;
     C6000.writeCfgRegister(0x37, 0xC0 | spkGain);
+
+    /*
+     * Digital voice gain, applied by the DAC stream driver with a soft
+     * limiter.  On air (v66) DMR and M17 stayed too quiet with reg 0x37 at
+     * +12 steps.  The speaker stream here goes through the HR_C6000's sample
+     * FIFO ("OpenMusic", reg 0x06), while the stock firmware plays its voice
+     * through the I2S port.
+     */
+    static const uint16_t voiceGainQ8[VOICE_GAIN_STEPS] =
+    {
+        256, 362, 512, 724, 1024, 1448, 2048, 2896, 4096
+    };
+    uint8_t voiceGain = config->voiceGain;
+    if(voiceGain >= VOICE_GAIN_STEPS)
+        voiceGain = VOICE_GAIN_DEFAULT;
+    Cx000dac_setStreamGain(voiceGainQ8[voiceGain]);
 #endif
 
     // Two-point bias (VCXO trim): the stock firmware's channel load takes it
